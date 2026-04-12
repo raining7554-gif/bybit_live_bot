@@ -116,6 +116,23 @@ USE_LIMIT_ORDER    = os.environ.get("USE_LIMIT_ORDER", "true").lower() == "true"
 LIMIT_OFFSET_ATR   = float(os.environ.get("LIMIT_OFFSET_ATR",  "0.1"))  # ATR * 0.1 offset
 LIMIT_TIMEOUT_SEC  = int(os.environ.get("LIMIT_TIMEOUT_SEC",   "30"))   # 30초 미체결 취소
 
+# ── v5.7 추가: ATR 기반 동적 손절 ──
+SL_ATR_MULT    = float(os.environ.get("SL_ATR_MULT",   "1.5"))   # ATR × 1.5
+SL_ATR_MIN     = float(os.environ.get("SL_ATR_MIN",    "0.005")) # 최소 손절 -0.5%
+SL_ATR_MAX     = float(os.environ.get("SL_ATR_MAX",    "0.015")) # 최대 손절 -1.5%
+
+# ── v5.7 추가: 횡보 BB 기반 익절 ──
+SW_TP_MIN      = float(os.environ.get("SW_TP_MIN",     "0.008")) # 최소 익절 +0.8%
+SW_TP_MAX      = float(os.environ.get("SW_TP_MAX",     "0.020")) # 최대 익절 +2.0%
+
+# ── v5.7 추가: 약한추세 관망 옵션 ──
+WEAK_TREND_ENABLED = os.environ.get("WEAK_TREND_ENABLED", "false").lower() == "true"
+
+# ── v5.7 추가: 시간대 필터 ──
+QUIET_HOURS_ENABLED = os.environ.get("QUIET_HOURS_ENABLED", "true").lower() == "true"
+QUIET_HOURS_START   = int(os.environ.get("QUIET_HOURS_START", "9"))   # UTC 시작
+QUIET_HOURS_END     = int(os.environ.get("QUIET_HOURS_END",   "13"))  # UTC 종료
+
 # ── v5.5 추가: 단계별 트레일 ──
 # TRAIL_LEVELS: 실제 가격% 기준 (레버리지 반영)
 # 레버리지 10배 기준: 레버수익% / 10 = 실제가격%
@@ -713,9 +730,11 @@ def check_exit(symbol: str, pos: dict, price: float, ind: dict) -> str:
     if pnl_pct <= -FLASH_CRASH:
         return "flash"
 
-    # ── 강한 추세 청산 (v5.5: 단계별 트레일) ──
+    # ── 강한 추세 청산 (v5.7: ATR 동적 손절 + 단계별 트레일) ──
     if mode == "strong_trend":
-        if pnl_pct <= -ST_SL_PCT:
+        # ATR 기반 동적 손절: 진입 시 저장한 sl_pct 사용, 없으면 ST_SL_PCT 폴백
+        sl_pct = pos.get("sl_pct", ST_SL_PCT)
+        if pnl_pct <= -sl_pct:
             return "sl"
         peak = pos.get("peak", 0)
         if peak >= TRAIL_LEVELS[0][0]:
@@ -728,8 +747,9 @@ def check_exit(symbol: str, pos: dict, price: float, ind: dict) -> str:
 
     # ── 횡보 청산 ──
     elif mode == "sideways":
-        # 고정 익절
-        if pnl_pct >= SW_TP_PCT:
+        # BB 기반 동적 익절: 진입 시 저장한 tp_pct 사용, 없으면 SW_TP_PCT 폴백
+        tp_pct = pos.get("tp_pct", SW_TP_PCT)
+        if pnl_pct >= tp_pct:
             return "tp"
         # 손절
         if pnl_pct <= -SW_SL_PCT:
@@ -748,6 +768,19 @@ def check_exit(symbol: str, pos: dict, price: float, ind: dict) -> str:
             return "trail"
 
     return ""
+
+# ══════════════════════════════════════════════════
+# 시간대 필터
+# ══════════════════════════════════════════════════
+def is_quiet_hours() -> bool:
+    """UTC 기준 QUIET_HOURS_START~END 시간대이면 True"""
+    if not QUIET_HOURS_ENABLED:
+        return False
+    utc_hour = datetime.now(timezone.utc).hour
+    if QUIET_HOURS_START <= QUIET_HOURS_END:
+        return QUIET_HOURS_START <= utc_hour < QUIET_HOURS_END
+    # 자정 걸치는 경우 (예: 22~02)
+    return utc_hour >= QUIET_HOURS_START or utc_hour < QUIET_HOURS_END
 
 # ══════════════════════════════════════════════════
 # 쿨다운 & 월별 한도 관리
@@ -1004,11 +1037,33 @@ def run_loop():
                 if sym in pending_orders:
                     continue
 
+                # ── 시간대 필터: 조용한 시간대에는 신규 진입 안 함 ──
+                if is_quiet_hours():
+                    continue
+
                 # 방향 카운트 체크
                 long_cnt  = sum(1 for p in open_pos.values() if p["side"] == "Buy")
                 short_cnt = sum(1 for p in open_pos.values() if p["side"] == "Sell")
 
                 atr = ind.get("atr", 0.0)
+                price_now = ind["price"]
+
+                # ── ATR 동적 손절 계산 (강한추세용) ──
+                if atr > 0 and price_now > 0:
+                    raw_sl = (atr * SL_ATR_MULT) / price_now
+                    dyn_sl_pct = max(SL_ATR_MIN, min(SL_ATR_MAX, raw_sl))
+                else:
+                    dyn_sl_pct = ST_SL_PCT
+
+                # ── BB 기반 동적 익절 계산 (횡보용) ──
+                bb_up_val  = ind["bb_mid"] + 2 * (ind["bb_mid"] * ind["bb_width"] / 2)
+                bb_low_val = ind["bb_mid"] - 2 * (ind["bb_mid"] * ind["bb_width"] / 2)
+                # bb_width = (bb_up - bb_low) / bb_mid → bb_up = bb_mid*(1 + bb_width/2) 근사
+                # 더 정확하게: bb_up = bb_mid + bb_std*2, bb_low = bb_mid - bb_std*2
+                # ind에 bb_up/bb_low가 없으므로 bb_width에서 역산
+                half_band = ind["bb_mid"] * ind["bb_width"] / 2
+                bb_up_val  = ind["bb_mid"] + half_band
+                bb_low_val = ind["bb_mid"] - half_band
 
                 # ── 강한 추세 전략 진입 ──
                 if fmode == "strong_trend":
@@ -1041,6 +1096,7 @@ def run_loop():
                             "entry":           ind["price"],
                             "size":            qty,
                             "peak":            0,
+                            "sl_pct":          dyn_sl_pct,   # v5.7: ATR 동적 손절
                             "pyr_count":       0,
                             "last_pyr_price":  ind["price"],
                         }
@@ -1053,7 +1109,7 @@ def run_loop():
 가격: ${ind['price']:,.2f}
 비중: {act_size*100:.0f}% (${margin:,.0f})
 ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
-손절: -{ST_SL_PCT*100:.1f}% | 트레일활성: +{ST_TRAIL_ACT*100:.1f}%""")
+손절: -{dyn_sl_pct*100:.2f}% (ATR×{SL_ATR_MULT}) | 트레일활성: +{ST_TRAIL_ACT*100:.1f}%""")
 
                 # ── 횡보 전략 진입 ──
                 elif fmode == "sideways":
@@ -1064,7 +1120,23 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
                     if order_side == "Buy"  and long_cnt  >= MAX_SAME_DIR: continue
                     if order_side == "Sell" and short_cnt >= MAX_SAME_DIR: continue
 
-                    qty = calc_qty(balance, SW_SIZE_PCT, ind["price"], sym)
+                    # v5.7: BB 폭 기반 동적 비중
+                    bb_w = ind["bb_width"]
+                    if bb_w >= 0.020:
+                        sw_act_size = min(SW_SIZE_PCT * 1.2, 0.26)
+                    elif bb_w >= 0.015:
+                        sw_act_size = SW_SIZE_PCT
+                    else:
+                        continue  # BB 폭 1.5% 미만 → 진입 안 함
+
+                    # v5.7: BB 기반 동적 익절 계산
+                    if sig == "LONG":
+                        raw_tp = (bb_up_val - price_now) / price_now if price_now > 0 else SW_TP_MIN
+                    else:
+                        raw_tp = (price_now - bb_low_val) / price_now if price_now > 0 else SW_TP_MIN
+                    sw_tp = max(SW_TP_MIN, min(SW_TP_MAX, raw_tp))
+
+                    qty = calc_qty(balance, sw_act_size, ind["price"], sym)
                     if qty <= 0:
                         continue
 
@@ -1077,23 +1149,24 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
                             "entry":           ind["price"],
                             "size":            qty,
                             "peak":            0,
+                            "tp_pct":          sw_tp,        # v5.7: BB 기반 익절
                             "pyr_count":       0,
                             "last_pyr_price":  ind["price"],
                         }
                         pos_count += 1
                         open_pos[sym] = {"side": order_side, "size": qty, "entry": ind["price"], "pnl": 0}
-                        margin = balance * SW_SIZE_PCT
+                        margin = balance * sw_act_size
                         sig_kr = "BB상단→숏" if sig == "SHORT" else "BB하단→롱"
                         order_type_str = "Limit" if USE_LIMIT_ORDER else "Market"
                         tg(f"""↔️ {sym} 진입 [{sig_kr}] ({order_type_str})
 모드: 횡보
 가격: ${ind['price']:,.2f}
-비중: {SW_SIZE_PCT*100:.0f}% (${margin:,.0f})
+비중: {sw_act_size*100:.0f}% (${margin:,.0f})
 BB위치: {ind['bb_pos']*100:.0f}% | RSI: {ind['rsi']:.0f}
-익절: +{SW_TP_PCT*100:.1f}% | 손절: -{SW_SL_PCT*100:.1f}%""")
+익절: +{sw_tp*100:.2f}% (BB반대편) | 손절: -{SW_SL_PCT*100:.1f}%""")
 
-                # ── 약한추세 전략 진입 (v5.5) ──
-                elif fmode == "weak_trend" and WEAK_ENABLED:
+                # ── 약한추세 전략 진입 (v5.7: WEAK_TREND_ENABLED로 제어) ──
+                elif fmode == "weak_trend" and WEAK_ENABLED and WEAK_TREND_ENABLED:
                     sig = get_strong_trend_signal(ind)  # 동일 신호 로직 재사용
                     if sig == "NONE":
                         continue
