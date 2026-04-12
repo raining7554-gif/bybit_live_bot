@@ -40,11 +40,12 @@ def now_kst(): return datetime.now(KST)
 # ══════════════════════════════════════════════════
 # ⚙️  환경변수 설정 (에이전트가 Railway API로 변경)
 # ══════════════════════════════════════════════════
-API_KEY    = os.environ.get("BYBIT_API_KEY", "")
-API_SECRET = os.environ.get("BYBIT_API_SECRET", "")
-TG_TOKEN   = os.environ.get("TG_TOKEN", "")
-TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
-TESTNET    = os.environ.get("TESTNET", "false").lower() == "true"
+API_KEY       = os.environ.get("BYBIT_API_KEY", "")
+API_SECRET    = os.environ.get("BYBIT_API_SECRET", "")
+TG_TOKEN      = os.environ.get("TG_TOKEN", "")
+TG_CHAT_ID    = os.environ.get("TG_CHAT_ID", "")
+TESTNET       = os.environ.get("TESTNET", "false").lower() == "true"
+POSITION_MODE = os.environ.get("POSITION_MODE", "one_way")  # "one_way" or "hedge"
 
 # ── 심볼 & 기본 설정 ──────────────────────────────
 SYMBOLS       = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "LINKUSDT"]  # v5.5: 5개 심볼
@@ -118,12 +119,13 @@ TRAIL_LEVELS = [
 # ══════════════════════════════════════════════════
 session = None
 positions     = {}      # {symbol: {side, entry, size, mode, ...}}
-mode_history  = []      # 최근 모드 히스토리 (안정성 필터용)
+mode_history  = {}      # {symbol: [mode1, mode2, ...]} 심볼별 모드 히스토리
+prev_mode     = {}      # {symbol: str} 이전 모드 (변경 알림용)
 cooldown      = {"strong_trend": 0, "sideways": 0}
 consec_loss   = {"strong_trend": 0, "sideways": 0}
 monthly_start = 0.0     # 월초 잔고
 monthly_stop  = False   # 월 손실 한도 도달 시 True
-entry_times   = {}      # {symbol: datetime}
+entry_times   = {}      # {symbol: float}  진입 시각 (time.time())
 
 # 1시간봉 캐시
 h1_cache      = {}      # {symbol: (mode, timestamp)}
@@ -135,6 +137,16 @@ trade_stats = {
     "sideways":     {"wins": 0, "losses": 0, "total_pnl": 0.0},
     "weak_trend":   {"wins": 0, "losses": 0, "total_pnl": 0.0},
 }
+
+# ── 전략 ON/OFF 토글 (텔레그램 버튼으로 제어) ──
+strategy_enabled = {
+    "strong_trend": True,
+    "sideways":     True,
+    "weak_trend":   True,
+}
+
+# 텔레그램 폴링 상태
+tg_last_update_id = 0
 
 # ══════════════════════════════════════════════════
 # 텔레그램
@@ -151,6 +163,124 @@ def tg(msg: str):
         )
     except Exception as e:
         print(f"[TG Error] {e}")
+
+def tg_send_strategy_menu(chat_id=None):
+    """전략 ON/OFF 인라인 버튼 메시지 발송"""
+    if not TG_TOKEN:
+        return
+    cid = chat_id or TG_CHAT_ID
+    if not cid:
+        return
+    mode_kr = {"strong_trend": "강한추세", "sideways": "횡보", "weak_trend": "약한추세"}
+    lines = ["📋 <b>전략 ON/OFF 설정</b>"]
+    for m, kr in mode_kr.items():
+        state = "✅ ON" if strategy_enabled[m] else "❌ OFF"
+        lines.append(f"{kr}: {state}")
+    text = "\n".join(lines)
+    buttons = []
+    for m, kr in mode_kr.items():
+        label = f"{'✅' if strategy_enabled[m] else '❌'} {kr} 토글"
+        buttons.append([{"text": label, "callback_data": f"toggle_{m}"}])
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={
+                "chat_id": cid,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": buttons},
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[TG Menu Error] {e}")
+
+def tg_edit_strategy_menu(chat_id, message_id):
+    """기존 메시지를 현재 전략 상태로 업데이트"""
+    if not TG_TOKEN:
+        return
+    mode_kr = {"strong_trend": "강한추세", "sideways": "횡보", "weak_trend": "약한추세"}
+    lines = ["📋 <b>전략 ON/OFF 설정</b>"]
+    for m, kr in mode_kr.items():
+        state = "✅ ON" if strategy_enabled[m] else "❌ OFF"
+        lines.append(f"{kr}: {state}")
+    text = "\n".join(lines)
+    buttons = []
+    for m, kr in mode_kr.items():
+        label = f"{'✅' if strategy_enabled[m] else '❌'} {kr} 토글"
+        buttons.append([{"text": label, "callback_data": f"toggle_{m}"}])
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
+            json={
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": {"inline_keyboard": buttons},
+            },
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[TG Edit Error] {e}")
+
+def tg_answer_callback(callback_query_id: str, text: str = ""):
+    """콜백 쿼리 응답 (버튼 로딩 스피너 해제)"""
+    if not TG_TOKEN:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/answerCallbackQuery",
+            json={"callback_query_id": callback_query_id, "text": text},
+            timeout=5
+        )
+    except Exception as e:
+        print(f"[TG Callback Error] {e}")
+
+def poll_telegram_updates():
+    """텔레그램 업데이트 폴링 및 처리"""
+    global tg_last_update_id
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates",
+            params={"offset": tg_last_update_id + 1, "timeout": 0, "limit": 10},
+            timeout=6
+        )
+        if r.status_code != 200:
+            return
+        updates = r.json().get("result", [])
+        for upd in updates:
+            tg_last_update_id = upd["update_id"]
+
+            # /strategy 텍스트 명령어
+            msg = upd.get("message", {})
+            if msg:
+                text = msg.get("text", "")
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+                if text.strip() == "/strategy":
+                    tg_send_strategy_menu(chat_id)
+                continue
+
+            # 인라인 버튼 콜백
+            cbq = upd.get("callback_query", {})
+            if cbq:
+                data        = cbq.get("data", "")
+                cbq_id      = cbq.get("id", "")
+                chat_id     = str(cbq.get("message", {}).get("chat", {}).get("id", ""))
+                message_id  = cbq.get("message", {}).get("message_id")
+
+                if data.startswith("toggle_"):
+                    mode_key = data[len("toggle_"):]
+                    if mode_key in strategy_enabled:
+                        strategy_enabled[mode_key] = not strategy_enabled[mode_key]
+                        state_str = "ON" if strategy_enabled[mode_key] else "OFF"
+                        mode_kr = {"strong_trend": "강한추세", "sideways": "횡보", "weak_trend": "약한추세"}
+                        tg_answer_callback(cbq_id, f"{mode_kr.get(mode_key, mode_key)} → {state_str}")
+                        tg_edit_strategy_menu(chat_id, message_id)
+    except Exception as e:
+        print(f"[TG Poll Error] {e}")
 
 # ══════════════════════════════════════════════════
 # 바이비트 API
@@ -223,6 +353,12 @@ def get_open_positions() -> dict:
         print(f"[포지션 오류] {e}")
         return {}
 
+def _get_position_idx(side: str) -> int:
+    """POSITION_MODE에 따라 positionIdx 반환"""
+    if POSITION_MODE == "hedge":
+        return 1 if side == "Buy" else 2
+    return 0  # one_way
+
 def place_order(symbol: str, side: str, qty: float) -> bool:
     try:
         r = session.place_order(
@@ -230,7 +366,8 @@ def place_order(symbol: str, side: str, qty: float) -> bool:
             symbol=symbol,
             side=side,
             orderType="Market",
-            qty=str(qty)
+            qty=str(qty),
+            positionIdx=_get_position_idx(side),
         )
         return r["retCode"] == 0
     except Exception as e:
@@ -379,25 +516,33 @@ def get_final_mode(m15: str, m1h: str) -> str:
     """
     멀티 타임프레임 최종 모드 결정
     - 둘 다 같으면 → 그 모드
-    - 1H가 unclear → 15분봉 따름
-    - 1H가 high_vol → watch
-    - 반대 신호     → watch
+    - 1H strong_trend + 15M weak_trend → strong_trend (상위 추세 우선)
+    - 1H sideways     + 15M weak_trend → sideways     (상위 횡보 우선)
+    - 1H unclear      → 15분봉 신뢰
+    - 1H high_vol     → watch
+    - 나머지 충돌     → watch
     """
     if m15 in ("unclear", "high_vol"):
         return "watch"
     if m1h == m15:
         return m15
     if m1h == "unclear":
-        return m15      # 1H 애매하면 15분봉 신뢰
+        return m15
     if m1h == "high_vol":
         return "watch"
-    return "watch"      # 반대 신호 → 관망
+    # 1H 상위 타임프레임이 명확한 모드일 때 weak_trend 충돌 해소
+    if m1h == "strong_trend" and m15 == "weak_trend":
+        return "strong_trend"
+    if m1h == "sideways" and m15 == "weak_trend":
+        return "sideways"
+    return "watch"      # 나머지 충돌 → 관망
 
-def is_stable_mode(mode: str) -> bool:
-    """최근 N캔들 동안 같은 모드인지 확인"""
-    if len(mode_history) < STABILITY_N:
+def is_stable_mode(symbol: str, mode: str) -> bool:
+    """심볼의 최근 STABILITY_N회 동안 같은 모드인지 확인"""
+    hist = mode_history.get(symbol, [])
+    if len(hist) < STABILITY_N:
         return False
-    return all(m == mode for m in mode_history[-STABILITY_N:])
+    return all(m == mode for m in hist[-STABILITY_N:])
 
 # ══════════════════════════════════════════════════
 # 진입 신호
@@ -559,7 +704,7 @@ def check_monthly_limit(balance: float) -> bool:
 # 메인 루프
 # ══════════════════════════════════════════════════
 def run_loop():
-    global monthly_start, monthly_stop, mode_history
+    global monthly_start, monthly_stop, mode_history, prev_mode
 
     loop_count = 0
     last_report = time.time()
@@ -568,6 +713,7 @@ def run_loop():
     tg(f"""🚀 바이비트 봇 v5.5 시작
 심볼: {', '.join(SYMBOLS)}
 레버리지: {LEVERAGE}배
+포지션모드: {POSITION_MODE}
 전략: 3모드 (강한추세/횡보/관망)
 추세: 비중{ST_SIZE_PCT*100:.0f}% 손절{ST_SL_PCT*100:.1f}% 트레일5단계
 횡보: 비중{SW_SIZE_PCT*100:.0f}% 익절{SW_TP_PCT*100:.1f}%
@@ -580,6 +726,9 @@ def run_loop():
         try:
             loop_count += 1
             update_cooldown()
+
+            # ── 텔레그램 업데이트 폴링 ──
+            poll_telegram_updates()
 
             balance = get_balance()
             if balance <= 0:
@@ -634,6 +783,12 @@ def run_loop():
                 # reason 먼저 체크 후 피라미딩 판단
                 reason = check_exit(sym, local_pos, price, {})
 
+                # ── MIN_HOLD_SEC 체크: flash 제외, 나머지는 보유시간 미달 시 청산 스킵 ──
+                if reason and reason != "flash":
+                    entry_ts = entry_times.get(sym, 0)
+                    if entry_ts > 0 and (time.time() - entry_ts) < MIN_HOLD_SEC:
+                        reason = ""  # 최소 보유시간 미경과 → 청산 보류
+
                 # ── v5.5 피라미딩 ──
                 if PYR_ENABLED and not reason:
                     pyr_count = local_pos.get("pyr_count", 0)
@@ -650,11 +805,12 @@ def run_loop():
                             qty2 = calc_qty(balance, PYR_SIZE_PCT, price, sym)
                             if qty2 > 0:
                                 try:
+                                    pyr_side = "Buy" if side == "Buy" else "Sell"
                                     session.place_order(
                                         category="linear", symbol=sym,
-                                        side="Buy" if side=="Buy" else "Sell",
+                                        side=pyr_side,
                                         orderType="Market", qty=str(qty2),
-                                        positionIdx=1 if side=="Buy" else 2,
+                                        positionIdx=_get_position_idx(pyr_side),
                                     )
                                     local_pos["pyr_count"] = pyr_count + 1
                                     local_pos["last_pyr_price"] = price
@@ -694,6 +850,7 @@ def run_loop():
                                 trade_stats[mode]["losses"] += 1
 
                         positions.pop(sym, None)
+                        entry_times.pop(sym, None)
 
             # ── 진입 판단 ──
             open_pos = get_open_positions()
@@ -722,12 +879,32 @@ def run_loop():
                 m1h = get_h1_mode(sym)
                 fmode = get_final_mode(m15, m1h)
 
+                # ── mode_history 기록 (심볼별) ──
+                hist = mode_history.setdefault(sym, [])
+                hist.append(fmode)
+                if len(hist) > STABILITY_N + 5:
+                    mode_history[sym] = hist[-(STABILITY_N + 5):]
+
+                # ── 모드 변경 알림 ──
+                old_mode = prev_mode.get(sym)
+                if old_mode is not None and old_mode != fmode:
+                    tg(f"📊 {sym}: {old_mode} → {fmode}")
+                prev_mode[sym] = fmode
+
                 # 관망 조건
                 if fmode == "watch":
                     continue
 
                 # 쿨다운 체크
                 if cooldown.get(fmode, 0) > 0:
+                    continue
+
+                # ── 안정성 필터: 최근 STABILITY_N회 연속 같은 모드인지 확인 ──
+                if not is_stable_mode(sym, fmode):
+                    continue
+
+                # ── 전략 ON/OFF 체크 ──
+                if not strategy_enabled.get(fmode, True):
                     continue
 
                 # 방향 카운트 체크
@@ -758,6 +935,7 @@ def run_loop():
 
                     ok = place_order(sym, order_side, qty)
                     if ok:
+                        entry_times[sym] = time.time()
                         positions[sym] = {
                             "mode":            "strong_trend",
                             "side":            order_side,
@@ -792,6 +970,7 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
 
                     ok = place_order(sym, order_side, qty)
                     if ok:
+                        entry_times[sym] = time.time()
                         positions[sym] = {
                             "mode":            "sideways",
                             "side":            order_side,
@@ -827,6 +1006,7 @@ BB위치: {ind['bb_pos']*100:.0f}% | RSI: {ind['rsi']:.0f}
 
                     ok = place_order(sym, order_side, qty)
                     if ok:
+                        entry_times[sym] = time.time()
                         positions[sym] = {
                             "mode":            "weak_trend",
                             "side":            order_side,
