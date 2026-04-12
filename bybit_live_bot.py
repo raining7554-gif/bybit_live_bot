@@ -102,6 +102,20 @@ PYR_MAX      = int(os.environ.get("PYR_MAX", "2"))             # 최대 2회
 # ── v5.5 추가: 동적비중 ──
 DYN_SIZE_ENABLED = os.environ.get("DYN_SIZE_ENABLED", "true").lower() == "true"
 
+# ── v5.6 추가: BTC 진입 빈도 제한 ──
+BTC_COOLDOWN_SEC = int(os.environ.get("BTC_COOLDOWN_SEC", "1800"))  # 기본 30분
+
+# ── v5.6 추가: 숏 조건 강화 ──
+SHORT_STRICT_MODE  = os.environ.get("SHORT_STRICT_MODE", "true").lower() == "true"
+ADX_SHORT_STRONG   = float(os.environ.get("ADX_SHORT_STRONG",  "35"))   # 강한추세 숏 ADX 최소
+BB_POS_SHORT       = float(os.environ.get("BB_POS_SHORT",      "0.92")) # 횡보 숏 BB 위치
+RSI_SHORT_SW       = float(os.environ.get("RSI_SHORT_SW",      "65"))   # 횡보 숏 RSI 최소
+
+# ── v5.6 추가: Limit 주문 ──
+USE_LIMIT_ORDER    = os.environ.get("USE_LIMIT_ORDER", "true").lower() == "true"
+LIMIT_OFFSET_ATR   = float(os.environ.get("LIMIT_OFFSET_ATR",  "0.1"))  # ATR * 0.1 offset
+LIMIT_TIMEOUT_SEC  = int(os.environ.get("LIMIT_TIMEOUT_SEC",   "30"))   # 30초 미체결 취소
+
 # ── v5.5 추가: 단계별 트레일 ──
 # TRAIL_LEVELS: 실제 가격% 기준 (레버리지 반영)
 # 레버리지 10배 기준: 레버수익% / 10 = 실제가격%
@@ -126,6 +140,8 @@ consec_loss   = {"strong_trend": 0, "sideways": 0}
 monthly_start = 0.0     # 월초 잔고
 monthly_stop  = False   # 월 손실 한도 도달 시 True
 entry_times   = {}      # {symbol: float}  진입 시각 (time.time())
+btc_last_exit = 0.0    # BTC 마지막 청산 시각 (time.time())
+pending_orders = {}    # {symbol: {"order_id": str, "placed_at": float}} Limit 미체결 추적
 
 # 1시간봉 캐시
 h1_cache      = {}      # {symbol: (mode, timestamp)}
@@ -359,24 +375,84 @@ def _get_position_idx(side: str) -> int:
         return 1 if side == "Buy" else 2
     return 0  # one_way
 
-def place_order(symbol: str, side: str, qty: float) -> bool:
+def place_order(symbol: str, side: str, qty: float, atr: float = 0.0) -> bool:
+    """진입 주문: USE_LIMIT_ORDER=true면 ATR 기반 Limit, 아니면 Market"""
     try:
-        r = session.place_order(
-            category="linear",
-            symbol=symbol,
-            side=side,
-            orderType="Market",
-            qty=str(qty),
-            positionIdx=_get_position_idx(side),
-        )
-        return r["retCode"] == 0
+        if USE_LIMIT_ORDER and atr > 0:
+            price = get_price(symbol)
+            if price <= 0:
+                return False
+            offset = atr * LIMIT_OFFSET_ATR
+            # 롱: 현재가보다 약간 아래, 숏: 약간 위
+            limit_price = price - offset if side == "Buy" else price + offset
+            # 심볼별 소수점 처리 (가격)
+            price_decimals = {"BTCUSDT": 1, "ETHUSDT": 2, "SOLUSDT": 3,
+                              "XRPUSDT": 4, "LINKUSDT": 3}
+            pd_ = price_decimals.get(symbol, 2)
+            limit_price = round(limit_price, pd_)
+            r = session.place_order(
+                category="linear",
+                symbol=symbol,
+                side=side,
+                orderType="Limit",
+                qty=str(qty),
+                price=str(limit_price),
+                timeInForce="GTC",
+                positionIdx=_get_position_idx(side),
+            )
+            if r["retCode"] == 0:
+                order_id = r["result"].get("orderId", "")
+                pending_orders[symbol] = {
+                    "order_id":  order_id,
+                    "placed_at": time.time(),
+                }
+                return True
+            return False
+        else:
+            r = session.place_order(
+                category="linear",
+                symbol=symbol,
+                side=side,
+                orderType="Market",
+                qty=str(qty),
+                positionIdx=_get_position_idx(side),
+            )
+            return r["retCode"] == 0
     except Exception as e:
         print(f"[주문 오류 {symbol}] {e}")
         return False
 
+def cancel_stale_orders():
+    """LIMIT_TIMEOUT_SEC 초과 미체결 Limit 주문 취소"""
+    now = time.time()
+    stale = [sym for sym, o in pending_orders.items()
+             if now - o["placed_at"] >= LIMIT_TIMEOUT_SEC]
+    for sym in stale:
+        order_id = pending_orders[sym]["order_id"]
+        try:
+            session.cancel_order(category="linear", symbol=sym, orderId=order_id)
+            print(f"[Limit 취소] {sym} orderId={order_id}")
+            tg(f"⏱ {sym} Limit 주문 미체결 취소 (30초 초과)")
+        except Exception as e:
+            print(f"[주문 취소 오류 {sym}] {e}")
+        pending_orders.pop(sym, None)
+
 def close_position(symbol: str, pos: dict) -> bool:
     close_side = "Sell" if pos["side"] == "Buy" else "Buy"
-    return place_order(symbol, close_side, pos["size"])
+    # 청산은 항상 Market (빠른 청산)
+    try:
+        r = session.place_order(
+            category="linear",
+            symbol=symbol,
+            side=close_side,
+            orderType="Market",
+            qty=str(pos["size"]),
+            positionIdx=_get_position_idx(close_side),
+        )
+        return r["retCode"] == 0
+    except Exception as e:
+        print(f"[청산 오류 {symbol}] {e}")
+        return False
 
 # ══════════════════════════════════════════════════
 # 지표 계산
@@ -555,7 +631,9 @@ def get_strong_trend_signal(ind: dict) -> str:
     di_short  = ind["di_minus"] > ind["di_plus"]  + DI_GAP
 
     long_ok  = ema_long  and di_long  and ind["rsi"] < 68
-    short_ok = ema_short and di_short and ind["rsi"] > 32
+    # SHORT_STRICT_MODE: 숏은 ADX_SHORT_STRONG(35) 이상일 때만 허용
+    adx_short_ok = ind["adx"] >= ADX_SHORT_STRONG if SHORT_STRICT_MODE else True
+    short_ok = ema_short and di_short and ind["rsi"] > 32 and adx_short_ok
 
     if long_ok:  return "LONG"
     if short_ok: return "SHORT"
@@ -569,8 +647,10 @@ def get_sideways_signal(ind: dict) -> str:
     rdt = ind["rsi"] < ind["rsi_h5"] * 0.97
     rdb = ind["rsi"] > ind["rsi_l5"] * 1.03
 
-    # BB 상단 → 숏 (3개 조건 중 2개)
-    if ind["bb_pos"] > 0.88 and ind["rsi"] > 60:
+    # BB 상단 → 숏 (SHORT_STRICT_MODE: BB 92% + RSI 65 이상으로 강화)
+    bb_short_thr = BB_POS_SHORT if SHORT_STRICT_MODE else 0.88
+    rsi_short_thr = RSI_SHORT_SW if SHORT_STRICT_MODE else 60
+    if ind["bb_pos"] > bb_short_thr and ind["rsi"] > rsi_short_thr:
         if sum([vw, uw, rdt]) >= 2:
             return "SHORT"
 
@@ -704,7 +784,7 @@ def check_monthly_limit(balance: float) -> bool:
 # 메인 루프
 # ══════════════════════════════════════════════════
 def run_loop():
-    global monthly_start, monthly_stop, mode_history, prev_mode
+    global monthly_start, monthly_stop, mode_history, prev_mode, btc_last_exit
 
     loop_count = 0
     last_report = time.time()
@@ -851,6 +931,12 @@ def run_loop():
 
                         positions.pop(sym, None)
                         entry_times.pop(sym, None)
+                        pending_orders.pop(sym, None)
+                        if sym == "BTCUSDT":
+                            btc_last_exit = time.time()
+
+            # ── Limit 미체결 주문 정리 ──
+            cancel_stale_orders()
 
             # ── 진입 판단 ──
             open_pos = get_open_positions()
@@ -907,9 +993,22 @@ def run_loop():
                 if not strategy_enabled.get(fmode, True):
                     continue
 
+                # ── BTC 진입 빈도 제한: 마지막 청산 후 BTC_COOLDOWN_SEC 경과해야 진입 ──
+                if sym == "BTCUSDT" and btc_last_exit > 0:
+                    if time.time() - btc_last_exit < BTC_COOLDOWN_SEC:
+                        remain = int(BTC_COOLDOWN_SEC - (time.time() - btc_last_exit))
+                        print(f"[BTC 쿨다운] {remain}초 남음")
+                        continue
+
+                # ── Limit 미체결 주문 있으면 중복 진입 방지 ──
+                if sym in pending_orders:
+                    continue
+
                 # 방향 카운트 체크
                 long_cnt  = sum(1 for p in open_pos.values() if p["side"] == "Buy")
                 short_cnt = sum(1 for p in open_pos.values() if p["side"] == "Sell")
+
+                atr = ind.get("atr", 0.0)
 
                 # ── 강한 추세 전략 진입 ──
                 if fmode == "strong_trend":
@@ -933,7 +1032,7 @@ def run_loop():
                     if qty <= 0:
                         continue
 
-                    ok = place_order(sym, order_side, qty)
+                    ok = place_order(sym, order_side, qty, atr=atr)
                     if ok:
                         entry_times[sym] = time.time()
                         positions[sym] = {
@@ -948,7 +1047,8 @@ def run_loop():
                         pos_count += 1
                         open_pos[sym] = {"side": order_side, "size": qty, "entry": ind["price"], "pnl": 0}
                         margin = balance * act_size
-                        tg(f"""📈 {sym} 진입 [{sig}]
+                        order_type_str = "Limit" if USE_LIMIT_ORDER else "Market"
+                        tg(f"""📈 {sym} 진입 [{sig}] ({order_type_str})
 모드: 강한추세
 가격: ${ind['price']:,.2f}
 비중: {act_size*100:.0f}% (${margin:,.0f})
@@ -968,7 +1068,7 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
                     if qty <= 0:
                         continue
 
-                    ok = place_order(sym, order_side, qty)
+                    ok = place_order(sym, order_side, qty, atr=atr)
                     if ok:
                         entry_times[sym] = time.time()
                         positions[sym] = {
@@ -984,7 +1084,8 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
                         open_pos[sym] = {"side": order_side, "size": qty, "entry": ind["price"], "pnl": 0}
                         margin = balance * SW_SIZE_PCT
                         sig_kr = "BB상단→숏" if sig == "SHORT" else "BB하단→롱"
-                        tg(f"""↔️ {sym} 진입 [{sig_kr}]
+                        order_type_str = "Limit" if USE_LIMIT_ORDER else "Market"
+                        tg(f"""↔️ {sym} 진입 [{sig_kr}] ({order_type_str})
 모드: 횡보
 가격: ${ind['price']:,.2f}
 비중: {SW_SIZE_PCT*100:.0f}% (${margin:,.0f})
@@ -996,6 +1097,9 @@ BB위치: {ind['bb_pos']*100:.0f}% | RSI: {ind['rsi']:.0f}
                     sig = get_strong_trend_signal(ind)  # 동일 신호 로직 재사용
                     if sig == "NONE":
                         continue
+                    # v5.6: 약한추세는 숏 비활성화 (SHORT_STRICT_MODE)
+                    if sig == "SHORT" and SHORT_STRICT_MODE:
+                        continue
                     order_side = "Buy" if sig == "LONG" else "Sell"
                     if order_side == "Buy"  and long_cnt  >= MAX_SAME_DIR: continue
                     if order_side == "Sell" and short_cnt >= MAX_SAME_DIR: continue
@@ -1004,7 +1108,7 @@ BB위치: {ind['bb_pos']*100:.0f}% | RSI: {ind['rsi']:.0f}
                     if qty <= 0:
                         continue
 
-                    ok = place_order(sym, order_side, qty)
+                    ok = place_order(sym, order_side, qty, atr=atr)
                     if ok:
                         entry_times[sym] = time.time()
                         positions[sym] = {
@@ -1019,7 +1123,8 @@ BB위치: {ind['bb_pos']*100:.0f}% | RSI: {ind['rsi']:.0f}
                         pos_count += 1
                         open_pos[sym] = {"side": order_side, "size": qty, "entry": ind["price"], "pnl": 0}
                         margin = balance * WEAK_SIZE_PCT
-                        tg(f"""〰️ {sym} 진입 [약한추세/{sig}]
+                        order_type_str = "Limit" if USE_LIMIT_ORDER else "Market"
+                        tg(f"""〰️ {sym} 진입 [약한추세/{sig}] ({order_type_str})
 모드: 약한추세
 가격: ${ind['price']:,.2f}
 비중: {WEAK_SIZE_PCT*100:.0f}% (${margin:,.0f})
