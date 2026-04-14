@@ -30,7 +30,7 @@ import time
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
-import os, sys, traceback
+import os, sys, traceback, json
 import requests
 import pytz
 
@@ -156,6 +156,139 @@ VOLUME_MIN_STRONG   = float(os.environ.get("VOLUME_MIN_STRONG", "1.2"))  # vol_r
 ADX_STRONG_HOLD     = float(os.environ.get("ADX_STRONG_HOLD",  "25"))   # 강한추세 유지 ADX
 ADX_SIDEWAYS_HOLD   = float(os.environ.get("ADX_SIDEWAYS_HOLD","23"))   # 횡보 유지 ADX
 
+# ══════════════════════════════════════════════════
+# 코인별 파라미터 (기능 A)
+# ══════════════════════════════════════════════════
+SYMBOL_CONFIG = {
+    "BTCUSDT": {
+        "sl_atr_mult":  1.3,
+        "sl_min":       0.005,
+        "sl_max":       0.012,
+        "volume_min":   1.3,
+        "adx_strong":   30,
+        "cooldown_sec": 1800,
+    },
+    "ETHUSDT": {
+        "sl_atr_mult":  1.5,
+        "sl_min":       0.005,
+        "sl_max":       0.015,
+        "volume_min":   1.2,
+        "adx_strong":   28,
+        "cooldown_sec": 600,
+    },
+    "SOLUSDT": {
+        "sl_atr_mult":  1.8,
+        "sl_min":       0.006,
+        "sl_max":       0.018,
+        "volume_min":   1.15,
+        "adx_strong":   26,
+        "cooldown_sec": 600,
+    },
+    "XRPUSDT": {
+        "sl_atr_mult":  1.8,
+        "sl_min":       0.006,
+        "sl_max":       0.018,
+        "volume_min":   1.15,
+        "adx_strong":   26,
+        "cooldown_sec": 600,
+    },
+    "LINKUSDT": {
+        "sl_atr_mult":  1.5,
+        "sl_min":       0.005,
+        "sl_max":       0.015,
+        "volume_min":   1.2,
+        "adx_strong":   28,
+        "cooldown_sec": 600,
+    },
+}
+
+def get_sym_cfg(symbol: str) -> dict:
+    """코인별 파라미터 반환, 없으면 ETHUSDT 기본값"""
+    return SYMBOL_CONFIG.get(symbol, SYMBOL_CONFIG["ETHUSDT"])
+
+# ══════════════════════════════════════════════════
+# 거래 기록 / 메트릭 (기능 B)
+# ══════════════════════════════════════════════════
+TRADE_LOG_PATH = "/tmp/trades.jsonl"
+
+def log_trade(symbol: str, mode: str, side: str, entry: float,
+              exit_price: float, pnl: float, pnl_pct: float, reason: str):
+    """거래 종료 시 JSONL 파일에 기록"""
+    rec = {
+        "ts":       time.time(),
+        "symbol":   symbol,
+        "mode":     mode,
+        "side":     side,
+        "entry":    entry,
+        "exit":     exit_price,
+        "pnl":      round(pnl, 4),
+        "pnl_pct":  round(pnl_pct, 6),
+        "reason":   reason,
+    }
+    try:
+        with open(TRADE_LOG_PATH, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception as e:
+        print(f"[로그 오류] {e}")
+
+def compute_metrics(days: int = 7) -> dict:
+    """최근 N일 거래 통계 계산: 승률, 샤프, MDD, 코인별 손익"""
+    cutoff = time.time() - days * 86400
+    trades = []
+    try:
+        with open(TRADE_LOG_PATH) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                    if rec.get("ts", 0) >= cutoff:
+                        trades.append(rec)
+                except Exception:
+                    pass
+    except FileNotFoundError:
+        return {}
+
+    if not trades:
+        return {}
+
+    pnls     = [t["pnl"] for t in trades]
+    wins     = sum(1 for p in pnls if p >= 0)
+    total    = len(pnls)
+    win_rate = wins / total if total else 0.0
+
+    # 샤프: 일별 PnL 집계 후 연율화
+    by_day: dict = {}
+    for t in trades:
+        day = int(t["ts"] // 86400)
+        by_day[day] = by_day.get(day, 0.0) + t["pnl"]
+    daily = list(by_day.values())
+    if len(daily) >= 2:
+        mu     = np.mean(daily)
+        std    = np.std(daily, ddof=1)
+        sharpe = (mu / std * np.sqrt(365)) if std > 0 else 0.0
+    else:
+        sharpe = 0.0
+
+    # MDD: 누적 PnL 기준
+    cumulative = np.cumsum(pnls)
+    peak       = np.maximum.accumulate(cumulative)
+    mdd        = float(np.max(peak - cumulative)) if len(cumulative) > 0 else 0.0
+
+    # 코인별 손익
+    sym_pnl: dict = {}
+    for t in trades:
+        s = t["symbol"]
+        sym_pnl[s] = sym_pnl.get(s, 0.0) + t["pnl"]
+
+    return {
+        "total":     total,
+        "wins":      wins,
+        "win_rate":  win_rate,
+        "sharpe":    round(sharpe, 2),
+        "mdd":       round(mdd, 2),
+        "total_pnl": round(sum(pnls), 2),
+        "sym_pnl":   sym_pnl,
+    }
+
 # ── v5.5 추가: 단계별 트레일 ──
 # TRAIL_LEVELS: 실제 가격% 기준 (레버리지 반영)
 # 레버리지 10배 기준: 레버수익% / 10 = 실제가격%
@@ -180,7 +313,7 @@ consec_loss   = {"strong_trend": 0, "sideways": 0}
 monthly_start = 0.0     # 월초 잔고
 monthly_stop  = False   # 월 손실 한도 도달 시 True
 entry_times   = {}      # {symbol: float}  진입 시각 (time.time())
-btc_last_exit  = 0.0   # BTC 마지막 청산 시각 (time.time())
+last_exit      = {}    # {symbol: float} 마지막 청산 시각 (코인별 쿨다운용)
 pending_orders = {}    # {symbol: {"order_id": str, "placed_at": float}} Limit 미체결 추적
 strong_sl_time = {}    # {symbol: float} 강한추세 손절 시각 (재진입 쿨다운용)
 
@@ -318,6 +451,21 @@ def poll_telegram_updates():
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 if text.strip() == "/strategy":
                     tg_send_strategy_menu(chat_id)
+                elif text.strip() == "/stats":
+                    m7 = compute_metrics(7)
+                    if not m7:
+                        tg("/stats: 최근 7일 거래 기록 없음")
+                    else:
+                        sym_lines = "".join(
+                            f"\n  {s}: ${v:+.2f}"
+                            for s, v in sorted(m7["sym_pnl"].items(), key=lambda x: -x[1])
+                        )
+                        tg(f"""📊 /stats (최근 7일)
+거래: {m7['total']}회 | 승률: {m7['win_rate']*100:.0f}%
+누적 PnL: ${m7['total_pnl']:+.2f}
+MDD: ${m7['mdd']:.2f}
+샤프: {m7['sharpe']:.2f}
+코인별:{sym_lines}""")
                 continue
 
             # 인라인 버튼 콜백
@@ -885,7 +1033,7 @@ def check_monthly_limit(balance: float) -> bool:
 # 메인 루프
 # ══════════════════════════════════════════════════
 def run_loop():
-    global monthly_start, monthly_stop, mode_history, prev_mode, btc_last_exit, strong_sl_time
+    global monthly_start, monthly_stop, mode_history, prev_mode, last_exit, strong_sl_time
 
     loop_count = 0
     last_report = time.time()
@@ -1037,8 +1185,9 @@ def run_loop():
                         positions.pop(sym, None)
                         entry_times.pop(sym, None)
                         pending_orders.pop(sym, None)
-                        if sym == "BTCUSDT":
-                            btc_last_exit = time.time()
+                        last_exit[sym] = time.time()
+                        log_trade(sym, mode, api_pos["side"], api_pos["entry"],
+                                  price, pnl, pnl_pct, reason)
                         # 수정 5: 강한추세 손절 시각 기록 (재진입 쿨다운용)
                         if reason == "sl" and mode == "strong_trend":
                             strong_sl_time[sym] = time.time()
@@ -1109,12 +1258,13 @@ def run_loop():
                 if not strategy_enabled.get(eff_mode, True):
                     continue
 
-                # ── BTC 진입 빈도 제한 ──
-                if sym == "BTCUSDT" and btc_last_exit > 0:
-                    if time.time() - btc_last_exit < BTC_COOLDOWN_SEC:
-                        remain = int(BTC_COOLDOWN_SEC - (time.time() - btc_last_exit))
-                        print(f"[BTC 쿨다운] {remain}초 남음")
-                        continue
+                # ── 코인별 진입 쿨다운 ──
+                _sym_cd   = get_sym_cfg(sym)["cooldown_sec"]
+                _sym_last = last_exit.get(sym, 0)
+                if _sym_last > 0 and time.time() - _sym_last < _sym_cd:
+                    remain = int(_sym_cd - (time.time() - _sym_last))
+                    print(f"[{sym} 쿨다운] {remain}초 남음")
+                    continue
 
                 # ── Limit 미체결 주문 있으면 중복 진입 방지 ──
                 if sym in pending_orders:
@@ -1131,9 +1281,11 @@ def run_loop():
                 atr       = ind.get("atr", 0.0)
                 price_now = ind["price"]
 
-                # ── ATR 동적 손절 계산 (강한추세용) ──
+                # ── ATR 동적 손절 계산 (코인별 파라미터 적용) ──
+                _scfg = get_sym_cfg(sym)
                 if atr > 0 and price_now > 0:
-                    dyn_sl_pct = max(SL_ATR_MIN, min(SL_ATR_MAX, (atr * SL_ATR_MULT) / price_now))
+                    dyn_sl_pct = max(_scfg["sl_min"], min(_scfg["sl_max"],
+                                     (atr * _scfg["sl_atr_mult"]) / price_now))
                 else:
                     dyn_sl_pct = ST_SL_PCT
 
@@ -1155,8 +1307,8 @@ def run_loop():
                     if order_side == "Buy"  and long_cnt  >= MAX_SAME_DIR: continue
                     if order_side == "Sell" and short_cnt >= MAX_SAME_DIR: continue
 
-                    # 거래량 필터 (수정 6)
-                    if ind.get("vol_ratio", 1.0) < VOLUME_MIN_STRONG:
+                    # 거래량 필터 (코인별)
+                    if ind.get("vol_ratio", 1.0) < _scfg["volume_min"]:
                         continue
 
                     # 강한추세 손절 후 재진입 쿨다운 체크 (수정 5)
@@ -1201,8 +1353,8 @@ ADX: {ind['adx']:.1f} | RSI: {ind['rsi']:.0f}""")
                     if order_side == "Buy"  and long_cnt  >= MAX_SAME_DIR: continue
                     if order_side == "Sell" and short_cnt >= MAX_SAME_DIR: continue
 
-                    # 수정 6: 거래량 필터
-                    if ind.get("vol_ratio", 1.0) < VOLUME_MIN_STRONG:
+                    # 수정 6: 거래량 필터 (코인별)
+                    if ind.get("vol_ratio", 1.0) < _scfg["volume_min"]:
                         continue
 
                     # 수정 5: 강한추세 손절 후 재진입 쿨다운
@@ -1245,7 +1397,7 @@ ADX: {ind['adx']:.1f} | RSI: {ind['rsi']:.0f}""")
 가격: ${price_now:,.2f}
 비중: {act_size*100:.0f}% (${margin:,.0f})
 ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}% | 거래량: {ind['vol_ratio']:.2f}
-손절: -{dyn_sl_pct*100:.2f}% (ATR×{SL_ATR_MULT}) | 트레일활성: +{TRAIL_LEVELS[0][0]*100:.1f}%""")
+손절: -{dyn_sl_pct*100:.2f}% (ATR×{_scfg['sl_atr_mult']}) | 트레일활성: +{TRAIL_LEVELS[0][0]*100:.1f}%""")
 
                 # ══════════════════════════════════════════════════
                 # ── 횡보 전략 진입 ──
@@ -1369,13 +1521,24 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
                             pnl_sum = st.get("total_pnl", 0)
                             stats_lines += f"\n  {kr}: {tot}회 승률{wr:.0f}% 누적${pnl_sum:+.1f}"
 
+                    m7 = compute_metrics(7)
+                    if m7:
+                        metrics_line = (
+                            f"\n─────────────────"
+                            f"\n📈 7일 메트릭"
+                            f"\n  거래: {m7['total']}회 | 승률: {m7['win_rate']*100:.0f}%"
+                            f"\n  누적: ${m7['total_pnl']:+.1f} | MDD: ${m7['mdd']:.1f}"
+                            f"\n  샤프: {m7['sharpe']:.2f}"
+                        )
+                    else:
+                        metrics_line = ""
                     tg(f"""📊 {now_dt.strftime('%H:%M')} 리포트
 잔고: ${balance:,.2f}
 월 손익: {monthly_pnl:+.1f}%
 포지션: {len(open_pos)}개{pos_lines}
 쿨다운: 추세={cooldown['strong_trend']} 횡보={cooldown['sideways']}
 ─────────────────
-전략별 성과 (이번달){stats_lines if stats_lines else chr(10)+"  기록 없음"}""")
+전략별 성과 (이번달){stats_lines if stats_lines else chr(10)+"  기록 없음"}{metrics_line}""")
 
             time.sleep(LOOP_SEC)
 
