@@ -1041,15 +1041,16 @@ def run_loop():
     last_report = time.time()
     REPORT_SEC = 3600  # 1시간마다 리포트
 
-    tg(f"""🚀 바이비트 봇 v5.5 시작
+    tg(f"""🚀 바이비트 봇 v6.0 시작 (BTC+ETH 집중)
 심볼: {', '.join(SYMBOLS)}
 레버리지: {LEVERAGE}배
+최대포지션: {MAX_POSITIONS}
 포지션모드: {POSITION_MODE}
 전략: 3모드 (강한추세/횡보/관망)
 추세: 비중{ST_SIZE_PCT*100:.0f}% 손절{ST_SL_PCT*100:.1f}% 트레일5단계
 횡보: 비중{SW_SIZE_PCT*100:.0f}% 익절{SW_TP_PCT*100:.1f}%
 약한추세: {"ON" if WEAK_ENABLED else "OFF"} (비중{WEAK_SIZE_PCT*100:.0f}% 익절{WEAK_TP_PCT*100:.1f}%)
-피라미딩: {"ON" if PYR_ENABLED else "OFF"} (+{PYR_TRIGGER*100:.0f}%시 {PYR_SIZE_PCT*100:.0f}% 추가)
+피라미딩: {"ON" if PYR_ENABLED else "OFF"}
 동적비중: {"ON" if DYN_SIZE_ENABLED else "OFF"}
 테스트넷: {TESTNET}""")
 
@@ -1564,9 +1565,9 @@ if __name__ == "__main__":
 
     print(f"""
 ╔══════════════════════════════════════╗
-║   바이비트 봇 v5.5                    ║
+║   바이비트 봇 v6.0 (BTC+ETH 집중)     ║
 ║   3모드 전략 (추세/횡보/관망)           ║
-║   BTC + ETH + SOL                    ║
+║   BTC + ETH 12x / 50%                ║
 ╚══════════════════════════════════════╝
 심볼: {SYMBOLS}
 레버리지: {LEVERAGE}배
