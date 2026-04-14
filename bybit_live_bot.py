@@ -66,13 +66,13 @@ DI_GAP        = float(os.environ.get("DI_GAP",        "10"))    # DI+/- 최소 �
 ATR_VOL_MULT  = float(os.environ.get("ATR_VOL_MULT",  "1.8"))   # 고변동성 배수
 
 # ── 강한 추세 전략 파라미터 (v5.1 최적화) ──────────
-ST_SIZE_PCT   = float(os.environ.get("ST_SIZE_PCT",   "0.50"))  # 비중 50% (v6.0)
+ST_SIZE_PCT   = 0.50  # v6.0: 하드코딩 (Railway 환경변수 무시)
 ST_SL_PCT     = float(os.environ.get("ST_SL_PCT",     "0.008")) # 손절 -0.8% (↑0.7%)
 ST_TRAIL_ACT  = float(os.environ.get("ST_TRAIL_ACT",  "0.012")) # 트레일 활성 +1.2%
 ST_TRAIL_CB   = float(os.environ.get("ST_TRAIL_CB",   "0.004")) # 트레일 콜백 0.4%
 
 # ── 횡보 전략 파라미터 (v5.1 최적화) ──────────────
-SW_SIZE_PCT   = float(os.environ.get("SW_SIZE_PCT",   "0.35"))  # 비중 35% (v6.0)
+SW_SIZE_PCT   = 0.35  # v6.0: 하드코딩 (Railway 환경변수 무시)
 SW_SL_PCT     = float(os.environ.get("SW_SL_PCT",     "0.005")) # 손절 -0.5% (↑0.4%)
 SW_TRAIL_ACT  = float(os.environ.get("SW_TRAIL_ACT",  "0.008")) # 트레일 활성 +0.8%
 SW_TRAIL_CB   = float(os.environ.get("SW_TRAIL_CB",   "0.003")) # 트레일 콜백 0.3%
