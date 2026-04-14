@@ -94,10 +94,15 @@ ADX_WEAK_MIN  = float(os.environ.get("ADX_WEAK_MIN",  "20"))     # 약한추세 
 ADX_WEAK_MAX  = float(os.environ.get("ADX_WEAK_MAX",  "32"))     # 약한추세 ADX 최대
 
 # ── v5.5 추가: 피라미딩 ──
-PYR_ENABLED  = os.environ.get("PYR_ENABLED", "true").lower() == "true"
-PYR_TRIGGER  = float(os.environ.get("PYR_TRIGGER", "0.020"))  # +2% 수익 시 추가진입
-PYR_SIZE_PCT = float(os.environ.get("PYR_SIZE_PCT", "0.10"))   # 추가비중 10%
-PYR_MAX      = int(os.environ.get("PYR_MAX", "2"))             # 최대 2회
+PYR_ENABLED   = os.environ.get("PYR_ENABLED", "true").lower() == "true"
+PYR_TRIGGER   = float(os.environ.get("PYR_TRIGGER",  "0.020"))  # 기존 호환용 (미사용)
+PYR_SIZE_PCT  = float(os.environ.get("PYR_SIZE_PCT",  "0.10"))   # 기존 호환용 (미사용)
+PYR_MAX       = int(os.environ.get("PYR_MAX", "2"))
+# ── v5.8: 2단계 피라미딩 세분화 ──
+PYRAMID_STEP1 = float(os.environ.get("PYRAMID_STEP1", "0.01"))  # +1% 시 1차 추가
+PYRAMID_STEP2 = float(os.environ.get("PYRAMID_STEP2", "0.03"))  # +3% 시 2차 추가
+PYRAMID_SIZE1 = float(os.environ.get("PYRAMID_SIZE1", "0.15"))  # 1차 추가비중 15%
+PYRAMID_SIZE2 = float(os.environ.get("PYRAMID_SIZE2", "0.20"))  # 2차 추가비중 20%
 
 # ── v5.5 추가: 동적비중 ──
 DYN_SIZE_ENABLED = os.environ.get("DYN_SIZE_ENABLED", "true").lower() == "true"
@@ -133,16 +138,34 @@ QUIET_HOURS_ENABLED = os.environ.get("QUIET_HOURS_ENABLED", "true").lower() == "
 QUIET_HOURS_START   = int(os.environ.get("QUIET_HOURS_START", "9"))   # UTC 시작
 QUIET_HOURS_END     = int(os.environ.get("QUIET_HOURS_END",   "13"))  # UTC 종료
 
+# ── v5.8 추가: 눌림목 진입 ──
+PULLBACK_MODE       = os.environ.get("PULLBACK_MODE", "true").lower() == "true"
+PULLBACK_BAND       = float(os.environ.get("PULLBACK_BAND", "0.005"))  # EMA20 ±0.5%
+
+# ── v5.8 추가: 롱/숏 비대칭 비중 ──
+LONG_SIZE_MULT      = float(os.environ.get("LONG_SIZE_MULT",  "1.15"))
+SHORT_SIZE_MULT     = float(os.environ.get("SHORT_SIZE_MULT", "0.75"))
+
+# ── v5.8 추가: 강한추세 손절 후 재진입 ──
+STRONG_REENTRY_MIN  = int(os.environ.get("STRONG_REENTRY_MIN", "20"))  # 재진입 대기 분
+
+# ── v5.8 추가: 거래량 필터 ──
+VOLUME_MIN_STRONG   = float(os.environ.get("VOLUME_MIN_STRONG", "1.2"))  # vol_ratio 최소
+
+# ── v5.8 추가: 히스테리시스 임계 ──
+ADX_STRONG_HOLD     = float(os.environ.get("ADX_STRONG_HOLD",  "25"))   # 강한추세 유지 ADX
+ADX_SIDEWAYS_HOLD   = float(os.environ.get("ADX_SIDEWAYS_HOLD","23"))   # 횡보 유지 ADX
+
 # ── v5.5 추가: 단계별 트레일 ──
 # TRAIL_LEVELS: 실제 가격% 기준 (레버리지 반영)
 # 레버리지 10배 기준: 레버수익% / 10 = 실제가격%
 # v5.5b: 타이트하게 조임 → 수익 더 빨리 보호
 TRAIL_LEVELS = [
-    (0.003, 0.002),   # 실제+0.3%(레버3%)  → 콜백 0.2%(레버2%)
-    (0.007, 0.003),   # 실제+0.7%(레버7%)  → 콜백 0.3%(레버3%)
-    (0.015, 0.005),   # 실제+1.5%(레버15%) → 콜백 0.5%(레버5%)
-    (0.025, 0.008),   # 실제+2.5%(레버25%) → 콜백 0.8%(레버8%)
-    (0.050, 0.015),   # 실제+5.0%(레버50%) → 콜백 1.5%(레버15%)
+    (0.008, 0.002),   # 실제+0.8%(레버8%)  → 콜백 0.2% (v5.8: +0.3→0.8 상향)
+    (0.012, 0.003),   # 실제+1.2%(레버12%) → 콜백 0.3% (v5.8: +0.7→1.2 상향)
+    (0.020, 0.005),   # 실제+2.0%(레버20%) → 콜백 0.5% (v5.8: +1.5→2.0 상향)
+    (0.030, 0.008),   # 실제+3.0%(레버30%) → 콜백 0.8% (v5.8: +2.5→3.0 상향)
+    (0.055, 0.015),   # 실제+5.5%(레버55%) → 콜백 1.5% (v5.8: +5.0→5.5 상향)
 ]
 
 # ══════════════════════════════════════════════════
@@ -157,8 +180,9 @@ consec_loss   = {"strong_trend": 0, "sideways": 0}
 monthly_start = 0.0     # 월초 잔고
 monthly_stop  = False   # 월 손실 한도 도달 시 True
 entry_times   = {}      # {symbol: float}  진입 시각 (time.time())
-btc_last_exit = 0.0    # BTC 마지막 청산 시각 (time.time())
+btc_last_exit  = 0.0   # BTC 마지막 청산 시각 (time.time())
 pending_orders = {}    # {symbol: {"order_id": str, "placed_at": float}} Limit 미체결 추적
+strong_sl_time = {}    # {symbol: float} 강한추세 손절 시각 (재진입 쿨다운용)
 
 # 1시간봉 캐시
 h1_cache      = {}      # {symbol: (mode, timestamp)}
@@ -553,12 +577,13 @@ def calc_indicators(df: pd.DataFrame) -> dict:
 # ══════════════════════════════════════════════════
 # 시장 모드 판단
 # ══════════════════════════════════════════════════
-def detect_mode(ind: dict) -> str:  # v5.5: weak_trend 추가
+def detect_mode(ind: dict, current_mode: str = "") -> str:
     """
     strong_trend : 강한 추세 → 추세 추종 전략
     sideways     : 횡보      → BB 역추세 전략
     high_vol     : 고변동성  → 관망
     unclear      : 애매      → 관망
+    v5.8: current_mode 파라미터로 히스테리시스 적용
     """
     if not ind:
         return "unclear"
@@ -576,7 +601,17 @@ def detect_mode(ind: dict) -> str:  # v5.5: weak_trend 추가
     if atr_ratio > ATR_VOL_MULT or bb_width > 0.05:
         return "high_vol"
 
-    # 강한 추세
+    # ── 히스테리시스: 현재 모드 유지 임계 ──
+    # 강한추세 유지: 진입 ADX>28, 이탈은 ADX<25 (ADX_STRONG_HOLD)
+    if current_mode == "strong_trend":
+        if adx >= ADX_STRONG_HOLD and bb_width > BB_STRONG and di_gap > DI_GAP:
+            return "strong_trend"
+    # 횡보 유지: 진입 ADX<20, 이탈은 ADX>23 (ADX_SIDEWAYS_HOLD)
+    if current_mode == "sideways":
+        if adx <= ADX_SIDEWAYS_HOLD and 0.015 < bb_width < BB_SIDEWAYS:
+            return "sideways"
+
+    # 강한 추세 신규 진입
     if adx > ADX_STRONG and bb_width > BB_STRONG and di_gap > DI_GAP:
         return "strong_trend"
 
@@ -591,19 +626,19 @@ def detect_mode(ind: dict) -> str:  # v5.5: weak_trend 추가
 
     return "unclear"
 
-def get_h1_mode(symbol: str) -> str:
-    """1시간봉 모드 캐시 (15분마다 갱신)"""
+def get_h1_mode(symbol: str) -> tuple:
+    """1시간봉 모드 + 지표 캐시 (15분마다 갱신). (mode, ind1h) 반환"""
     now = time.time()
     if symbol in h1_cache:
-        cached_mode, cached_time = h1_cache[symbol]
+        cached_mode, cached_time, cached_ind = h1_cache[symbol]
         if now - cached_time < H1_CACHE_SEC:
-            return cached_mode
+            return cached_mode, cached_ind
 
     df1h = get_ohlcv(symbol, "60", 80)
     ind1h = calc_indicators(df1h)
     mode = detect_mode(ind1h)
-    h1_cache[symbol] = (mode, now)
-    return mode
+    h1_cache[symbol] = (mode, now, ind1h)
+    return mode, ind1h
 
 def get_final_mode(m15: str, m1h: str) -> str:
     """
@@ -636,6 +671,39 @@ def is_stable_mode(symbol: str, mode: str) -> bool:
     if len(hist) < STABILITY_N:
         return False
     return all(m == mode for m in hist[-STABILITY_N:])
+
+def get_pullback_signal(ind15: dict, ind1h: dict) -> str:
+    """
+    눌림목 진입 신호 (PULLBACK_MODE=true 시 사용)
+    - 1H EMA20 > EMA50 (상승 추세) + 15m 가격이 EMA20 ±0.5% 이내 → LONG
+    - 1H EMA20 < EMA50 (하락 추세) + 15m 가격이 EMA20 ±0.5% 이내 → SHORT
+    - ADX 조건 불필요 (조정 구간이므로 ADX 낮아도 허용)
+    """
+    if not ind15 or not ind1h:
+        return "NONE"
+    price    = ind15["price"]
+    ema20_15 = ind15["ema20"]
+    ema20_1h = ind1h.get("ema20", 0)
+    ema50_1h = ind1h.get("ema50", 0)
+    if ema20_15 <= 0 or ema20_1h <= 0:
+        return "NONE"
+
+    near_ema = abs(price - ema20_15) / ema20_15 <= PULLBACK_BAND
+
+    if not near_ema:
+        return "NONE"
+
+    h1_uptrend   = ema20_1h > ema50_1h
+    h1_downtrend = ema20_1h < ema50_1h
+
+    # 추가 필터: RSI 과열/과매도 제외
+    if h1_uptrend   and ind15["rsi"] < 65:
+        return "LONG"
+    if h1_downtrend and ind15["rsi"] > 35 and not SHORT_STRICT_MODE:
+        return "SHORT"
+    if h1_downtrend and ind15["rsi"] > 35 and SHORT_STRICT_MODE and ind15["adx"] >= ADX_SHORT_STRONG:
+        return "SHORT"
+    return "NONE"
 
 # ══════════════════════════════════════════════════
 # 진입 신호
@@ -817,7 +885,7 @@ def check_monthly_limit(balance: float) -> bool:
 # 메인 루프
 # ══════════════════════════════════════════════════
 def run_loop():
-    global monthly_start, monthly_stop, mode_history, prev_mode, btc_last_exit
+    global monthly_start, monthly_stop, mode_history, prev_mode, btc_last_exit, strong_sl_time
 
     loop_count = 0
     last_report = time.time()
@@ -902,35 +970,39 @@ def run_loop():
                     if entry_ts > 0 and (time.time() - entry_ts) < MIN_HOLD_SEC:
                         reason = ""  # 최소 보유시간 미경과 → 청산 보류
 
-                # ── v5.5 피라미딩 ──
+                # ── v5.8 피라미딩 (2단계 세분화) ──
                 if PYR_ENABLED and not reason:
-                    pyr_count = local_pos.get("pyr_count", 0)
-                    if pyr_count < PYR_MAX:
-                        entry = local_pos.get("entry", price)
-                        side  = local_pos.get("side", "Buy")
-                        if side == "Buy":
-                            cur_pnl = (price - entry) / entry
-                        else:
-                            cur_pnl = (entry - price) / entry
-                        last_pyr = local_pos.get("last_pyr_price", entry)
-                        if (cur_pnl >= PYR_TRIGGER and
-                                abs(price - last_pyr) / last_pyr > 0.005):
-                            qty2 = calc_qty(balance, PYR_SIZE_PCT, price, sym)
-                            if qty2 > 0:
-                                try:
-                                    pyr_side = "Buy" if side == "Buy" else "Sell"
-                                    session.place_order(
-                                        category="linear", symbol=sym,
-                                        side=pyr_side,
-                                        orderType="Market", qty=str(qty2),
-                                        positionIdx=_get_position_idx(pyr_side),
-                                    )
-                                    local_pos["pyr_count"] = pyr_count + 1
-                                    local_pos["last_pyr_price"] = price
-                                    tg(f"📈 {sym} 피라미딩 #{pyr_count+1}\n"
-                                       f"수익: {cur_pnl*100:+.2f}% → 추가 {PYR_SIZE_PCT*100:.0f}%")
-                                except Exception as e:
-                                    print(f"[피라미딩 오류] {e}")
+                    entry_p = local_pos.get("entry", price)
+                    side    = local_pos.get("side", "Buy")
+                    cur_pnl = (price - entry_p) / entry_p if side == "Buy" else (entry_p - price) / entry_p
+                    pyr_s1  = local_pos.get("pyr_s1", False)  # 1차 추가 완료 여부
+                    pyr_s2  = local_pos.get("pyr_s2", False)  # 2차 추가 완료 여부
+                    pyr_side = side  # Buy or Sell
+
+                    def _do_pyramid(size_pct: float, step_label: str):
+                        qty2 = calc_qty(balance, size_pct, price, sym)
+                        if qty2 <= 0:
+                            return
+                        try:
+                            session.place_order(
+                                category="linear", symbol=sym,
+                                side=pyr_side,
+                                orderType="Market", qty=str(qty2),
+                                positionIdx=_get_position_idx(pyr_side),
+                            )
+                            tg(f"📈 {sym} 피라미딩 {step_label}\n"
+                               f"수익: {cur_pnl*100:+.2f}% → 추가비중 {size_pct*100:.0f}%")
+                        except Exception as e:
+                            print(f"[피라미딩 오류] {e}")
+
+                    # 1차: +1% 도달 시
+                    if not pyr_s1 and cur_pnl >= PYRAMID_STEP1:
+                        _do_pyramid(PYRAMID_SIZE1, "#1(+1%→+15%)")
+                        local_pos["pyr_s1"] = True
+                    # 2차: +3% 도달 시 (1차 완료 후)
+                    elif pyr_s1 and not pyr_s2 and cur_pnl >= PYRAMID_STEP2:
+                        _do_pyramid(PYRAMID_SIZE2, "#2(+3%→+20%)")
+                        local_pos["pyr_s2"] = True
 
                 if reason:
                     pnl = api_pos["pnl"]
@@ -967,6 +1039,9 @@ def run_loop():
                         pending_orders.pop(sym, None)
                         if sym == "BTCUSDT":
                             btc_last_exit = time.time()
+                        # 수정 5: 강한추세 손절 시각 기록 (재진입 쿨다운용)
+                        if reason == "sl" and mode == "strong_trend":
+                            strong_sl_time[sym] = time.time()
 
             # ── Limit 미체결 주문 정리 ──
             cancel_stale_orders()
@@ -993,9 +1068,10 @@ def run_loop():
                 if not ind:
                     continue
 
-                # 모드 판단
-                m15 = detect_mode(ind)
-                m1h = get_h1_mode(sym)
+                # 모드 판단 (히스테리시스: 이전 모드 전달)
+                cur_sym_mode = prev_mode.get(sym, "")
+                m15   = detect_mode(ind, current_mode=cur_sym_mode)
+                m1h, ind1h = get_h1_mode(sym)
                 fmode = get_final_mode(m15, m1h)
 
                 # ── mode_history 기록 (심볼별) ──
@@ -1010,23 +1086,30 @@ def run_loop():
                     tg(f"📊 {sym}: {old_mode} → {fmode}")
                 prev_mode[sym] = fmode
 
-                # 관망 조건
-                if fmode == "watch":
+                # ── 관망 구간에서도 눌림목 진입 시도 (PULLBACK_MODE) ──
+                pullback_sig = "NONE"
+                if fmode == "watch" and PULLBACK_MODE:
+                    pullback_sig = get_pullback_signal(ind, ind1h)
+                    if pullback_sig == "NONE":
+                        continue
+                elif fmode == "watch":
                     continue
 
-                # 쿨다운 체크
-                if cooldown.get(fmode, 0) > 0:
+                # 쿨다운 체크 (눌림목은 strong_trend 쿨다운 공유)
+                check_mode = "strong_trend" if pullback_sig != "NONE" else fmode
+                if cooldown.get(check_mode, 0) > 0:
                     continue
 
-                # ── 안정성 필터: 최근 STABILITY_N회 연속 같은 모드인지 확인 ──
-                if not is_stable_mode(sym, fmode):
+                # ── 안정성 필터: 눌림목은 안정성 필터 면제 (조정은 단기 현상) ──
+                if pullback_sig == "NONE" and not is_stable_mode(sym, fmode):
                     continue
 
                 # ── 전략 ON/OFF 체크 ──
-                if not strategy_enabled.get(fmode, True):
+                eff_mode = "strong_trend" if pullback_sig != "NONE" else fmode
+                if not strategy_enabled.get(eff_mode, True):
                     continue
 
-                # ── BTC 진입 빈도 제한: 마지막 청산 후 BTC_COOLDOWN_SEC 경과해야 진입 ──
+                # ── BTC 진입 빈도 제한 ──
                 if sym == "BTCUSDT" and btc_last_exit > 0:
                     if time.time() - btc_last_exit < BTC_COOLDOWN_SEC:
                         remain = int(BTC_COOLDOWN_SEC - (time.time() - btc_last_exit))
@@ -1037,7 +1120,7 @@ def run_loop():
                 if sym in pending_orders:
                     continue
 
-                # ── 시간대 필터: 조용한 시간대에는 신규 진입 안 함 ──
+                # ── 시간대 필터 ──
                 if is_quiet_hours():
                     continue
 
@@ -1045,28 +1128,72 @@ def run_loop():
                 long_cnt  = sum(1 for p in open_pos.values() if p["side"] == "Buy")
                 short_cnt = sum(1 for p in open_pos.values() if p["side"] == "Sell")
 
-                atr = ind.get("atr", 0.0)
+                atr       = ind.get("atr", 0.0)
                 price_now = ind["price"]
 
                 # ── ATR 동적 손절 계산 (강한추세용) ──
                 if atr > 0 and price_now > 0:
-                    raw_sl = (atr * SL_ATR_MULT) / price_now
-                    dyn_sl_pct = max(SL_ATR_MIN, min(SL_ATR_MAX, raw_sl))
+                    dyn_sl_pct = max(SL_ATR_MIN, min(SL_ATR_MAX, (atr * SL_ATR_MULT) / price_now))
                 else:
                     dyn_sl_pct = ST_SL_PCT
 
                 # ── BB 기반 동적 익절 계산 (횡보용) ──
-                bb_up_val  = ind["bb_mid"] + 2 * (ind["bb_mid"] * ind["bb_width"] / 2)
-                bb_low_val = ind["bb_mid"] - 2 * (ind["bb_mid"] * ind["bb_width"] / 2)
-                # bb_width = (bb_up - bb_low) / bb_mid → bb_up = bb_mid*(1 + bb_width/2) 근사
-                # 더 정확하게: bb_up = bb_mid + bb_std*2, bb_low = bb_mid - bb_std*2
-                # ind에 bb_up/bb_low가 없으므로 bb_width에서 역산
-                half_band = ind["bb_mid"] * ind["bb_width"] / 2
+                half_band  = ind["bb_mid"] * ind["bb_width"] / 2
                 bb_up_val  = ind["bb_mid"] + half_band
                 bb_low_val = ind["bb_mid"] - half_band
 
+                def _apply_dir_mult(base_size: float, order_side: str) -> float:
+                    """롱/숏 비대칭 비중 적용"""
+                    mult = LONG_SIZE_MULT if order_side == "Buy" else SHORT_SIZE_MULT
+                    return base_size * mult
+
+                # ══════════════════════════════════════════════════
+                # ── 눌림목 진입 (PULLBACK_MODE, fmode==watch 시) ──
+                # ══════════════════════════════════════════════════
+                if pullback_sig != "NONE":
+                    order_side = "Buy" if pullback_sig == "LONG" else "Sell"
+                    if order_side == "Buy"  and long_cnt  >= MAX_SAME_DIR: continue
+                    if order_side == "Sell" and short_cnt >= MAX_SAME_DIR: continue
+
+                    # 거래량 필터 (수정 6)
+                    if ind.get("vol_ratio", 1.0) < VOLUME_MIN_STRONG:
+                        continue
+
+                    # 강한추세 손절 후 재진입 쿨다운 체크 (수정 5)
+                    sl_ts = strong_sl_time.get(sym, 0)
+                    if sl_ts > 0 and (time.time() - sl_ts) < STRONG_REENTRY_MIN * 60:
+                        continue
+
+                    base_size = ST_SIZE_PCT * 0.78  # 눌림목은 약간 보수적 비중
+                    act_size  = _apply_dir_mult(base_size, order_side)
+                    qty = calc_qty(balance, act_size, price_now, sym)
+                    if qty <= 0:
+                        continue
+
+                    ok = place_order(sym, order_side, qty, atr=atr)
+                    if ok:
+                        entry_times[sym]  = time.time()
+                        positions[sym] = {
+                            "mode":  "strong_trend",
+                            "side":  order_side,
+                            "entry": price_now,
+                            "size":  qty,
+                            "peak":  0,
+                            "sl_pct": dyn_sl_pct,
+                            "pyr_s1": False, "pyr_s2": False,
+                        }
+                        pos_count += 1
+                        open_pos[sym] = {"side": order_side, "size": qty, "entry": price_now, "pnl": 0}
+                        order_type_str = "Limit" if USE_LIMIT_ORDER else "Market"
+                        tg(f"""🎯 {sym} 눌림목 진입 [{pullback_sig}] ({order_type_str})
+가격: ${price_now:,.2f} | EMA20 근처
+비중: {act_size*100:.0f}% | 손절: -{dyn_sl_pct*100:.2f}%
+ADX: {ind['adx']:.1f} | RSI: {ind['rsi']:.0f}""")
+
+                # ══════════════════════════════════════════════════
                 # ── 강한 추세 전략 진입 ──
-                if fmode == "strong_trend":
+                # ══════════════════════════════════════════════════
+                elif fmode == "strong_trend":
                     sig = get_strong_trend_signal(ind)
                     if sig == "NONE":
                         continue
@@ -1074,16 +1201,26 @@ def run_loop():
                     if order_side == "Buy"  and long_cnt  >= MAX_SAME_DIR: continue
                     if order_side == "Sell" and short_cnt >= MAX_SAME_DIR: continue
 
-                    # v5.5 동적비중
+                    # 수정 6: 거래량 필터
+                    if ind.get("vol_ratio", 1.0) < VOLUME_MIN_STRONG:
+                        continue
+
+                    # 수정 5: 강한추세 손절 후 재진입 쿨다운
+                    sl_ts = strong_sl_time.get(sym, 0)
+                    if sl_ts > 0 and (time.time() - sl_ts) < STRONG_REENTRY_MIN * 60:
+                        continue
+
+                    # 동적비중 (v5.5) + 비대칭 비중 (v5.8)
                     if DYN_SIZE_ENABLED:
                         adx_v = ind.get("adx", 28)
-                        if adx_v >= 50:   act_size = min(ST_SIZE_PCT * 1.25, 0.40)
-                        elif adx_v >= 35: act_size = ST_SIZE_PCT
-                        else:             act_size = ST_SIZE_PCT * 0.78
+                        if adx_v >= 50:   base_size = min(ST_SIZE_PCT * 1.25, 0.40)
+                        elif adx_v >= 35: base_size = ST_SIZE_PCT
+                        else:             base_size = ST_SIZE_PCT * 0.78
                     else:
-                        act_size = ST_SIZE_PCT
+                        base_size = ST_SIZE_PCT
+                    act_size = _apply_dir_mult(base_size, order_side)
 
-                    qty = calc_qty(balance, act_size, ind["price"], sym)
+                    qty = calc_qty(balance, act_size, price_now, sym)
                     if qty <= 0:
                         continue
 
@@ -1091,27 +1228,28 @@ def run_loop():
                     if ok:
                         entry_times[sym] = time.time()
                         positions[sym] = {
-                            "mode":            "strong_trend",
-                            "side":            order_side,
-                            "entry":           ind["price"],
-                            "size":            qty,
-                            "peak":            0,
-                            "sl_pct":          dyn_sl_pct,   # v5.7: ATR 동적 손절
-                            "pyr_count":       0,
-                            "last_pyr_price":  ind["price"],
+                            "mode":   "strong_trend",
+                            "side":   order_side,
+                            "entry":  price_now,
+                            "size":   qty,
+                            "peak":   0,
+                            "sl_pct": dyn_sl_pct,
+                            "pyr_s1": False, "pyr_s2": False,
                         }
                         pos_count += 1
-                        open_pos[sym] = {"side": order_side, "size": qty, "entry": ind["price"], "pnl": 0}
+                        open_pos[sym] = {"side": order_side, "size": qty, "entry": price_now, "pnl": 0}
                         margin = balance * act_size
                         order_type_str = "Limit" if USE_LIMIT_ORDER else "Market"
                         tg(f"""📈 {sym} 진입 [{sig}] ({order_type_str})
 모드: 강한추세
-가격: ${ind['price']:,.2f}
+가격: ${price_now:,.2f}
 비중: {act_size*100:.0f}% (${margin:,.0f})
-ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
-손절: -{dyn_sl_pct*100:.2f}% (ATR×{SL_ATR_MULT}) | 트레일활성: +{ST_TRAIL_ACT*100:.1f}%""")
+ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}% | 거래량: {ind['vol_ratio']:.2f}
+손절: -{dyn_sl_pct*100:.2f}% (ATR×{SL_ATR_MULT}) | 트레일활성: +{TRAIL_LEVELS[0][0]*100:.1f}%""")
 
+                # ══════════════════════════════════════════════════
                 # ── 횡보 전략 진입 ──
+                # ══════════════════════════════════════════════════
                 elif fmode == "sideways":
                     sig = get_sideways_signal(ind)
                     if sig == "NONE":
@@ -1120,23 +1258,24 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
                     if order_side == "Buy"  and long_cnt  >= MAX_SAME_DIR: continue
                     if order_side == "Sell" and short_cnt >= MAX_SAME_DIR: continue
 
-                    # v5.7: BB 폭 기반 동적 비중
+                    # BB 폭 기반 동적 비중 + 비대칭 비중
                     bb_w = ind["bb_width"]
                     if bb_w >= 0.020:
-                        sw_act_size = min(SW_SIZE_PCT * 1.2, 0.26)
+                        sw_base = min(SW_SIZE_PCT * 1.2, 0.26)
                     elif bb_w >= 0.015:
-                        sw_act_size = SW_SIZE_PCT
+                        sw_base = SW_SIZE_PCT
                     else:
-                        continue  # BB 폭 1.5% 미만 → 진입 안 함
+                        continue
+                    sw_act_size = _apply_dir_mult(sw_base, order_side)
 
-                    # v5.7: BB 기반 동적 익절 계산
+                    # BB 기반 동적 익절
                     if sig == "LONG":
                         raw_tp = (bb_up_val - price_now) / price_now if price_now > 0 else SW_TP_MIN
                     else:
                         raw_tp = (price_now - bb_low_val) / price_now if price_now > 0 else SW_TP_MIN
                     sw_tp = max(SW_TP_MIN, min(SW_TP_MAX, raw_tp))
 
-                    qty = calc_qty(balance, sw_act_size, ind["price"], sym)
+                    qty = calc_qty(balance, sw_act_size, price_now, sym)
                     if qty <= 0:
                         continue
 
@@ -1144,40 +1283,41 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
                     if ok:
                         entry_times[sym] = time.time()
                         positions[sym] = {
-                            "mode":            "sideways",
-                            "side":            order_side,
-                            "entry":           ind["price"],
-                            "size":            qty,
-                            "peak":            0,
-                            "tp_pct":          sw_tp,        # v5.7: BB 기반 익절
-                            "pyr_count":       0,
-                            "last_pyr_price":  ind["price"],
+                            "mode":   "sideways",
+                            "side":   order_side,
+                            "entry":  price_now,
+                            "size":   qty,
+                            "peak":   0,
+                            "tp_pct": sw_tp,
+                            "pyr_s1": False, "pyr_s2": False,
                         }
                         pos_count += 1
-                        open_pos[sym] = {"side": order_side, "size": qty, "entry": ind["price"], "pnl": 0}
+                        open_pos[sym] = {"side": order_side, "size": qty, "entry": price_now, "pnl": 0}
                         margin = balance * sw_act_size
                         sig_kr = "BB상단→숏" if sig == "SHORT" else "BB하단→롱"
                         order_type_str = "Limit" if USE_LIMIT_ORDER else "Market"
                         tg(f"""↔️ {sym} 진입 [{sig_kr}] ({order_type_str})
 모드: 횡보
-가격: ${ind['price']:,.2f}
+가격: ${price_now:,.2f}
 비중: {sw_act_size*100:.0f}% (${margin:,.0f})
 BB위치: {ind['bb_pos']*100:.0f}% | RSI: {ind['rsi']:.0f}
 익절: +{sw_tp*100:.2f}% (BB반대편) | 손절: -{SW_SL_PCT*100:.1f}%""")
 
-                # ── 약한추세 전략 진입 (v5.7: WEAK_TREND_ENABLED로 제어) ──
+                # ══════════════════════════════════════════════════
+                # ── 약한추세 전략 진입 ──
+                # ══════════════════════════════════════════════════
                 elif fmode == "weak_trend" and WEAK_ENABLED and WEAK_TREND_ENABLED:
-                    sig = get_strong_trend_signal(ind)  # 동일 신호 로직 재사용
+                    sig = get_strong_trend_signal(ind)
                     if sig == "NONE":
                         continue
-                    # v5.6: 약한추세는 숏 비활성화 (SHORT_STRICT_MODE)
                     if sig == "SHORT" and SHORT_STRICT_MODE:
                         continue
                     order_side = "Buy" if sig == "LONG" else "Sell"
                     if order_side == "Buy"  and long_cnt  >= MAX_SAME_DIR: continue
                     if order_side == "Sell" and short_cnt >= MAX_SAME_DIR: continue
 
-                    qty = calc_qty(balance, WEAK_SIZE_PCT, ind["price"], sym)
+                    act_size = _apply_dir_mult(WEAK_SIZE_PCT, order_side)
+                    qty = calc_qty(balance, act_size, price_now, sym)
                     if qty <= 0:
                         continue
 
@@ -1185,22 +1325,21 @@ BB위치: {ind['bb_pos']*100:.0f}% | RSI: {ind['rsi']:.0f}
                     if ok:
                         entry_times[sym] = time.time()
                         positions[sym] = {
-                            "mode":            "weak_trend",
-                            "side":            order_side,
-                            "entry":           ind["price"],
-                            "size":            qty,
-                            "peak":            0,
-                            "pyr_count":       0,
-                            "last_pyr_price":  ind["price"],
+                            "mode":   "weak_trend",
+                            "side":   order_side,
+                            "entry":  price_now,
+                            "size":   qty,
+                            "peak":   0,
+                            "pyr_s1": False, "pyr_s2": False,
                         }
                         pos_count += 1
-                        open_pos[sym] = {"side": order_side, "size": qty, "entry": ind["price"], "pnl": 0}
-                        margin = balance * WEAK_SIZE_PCT
+                        open_pos[sym] = {"side": order_side, "size": qty, "entry": price_now, "pnl": 0}
+                        margin = balance * act_size
                         order_type_str = "Limit" if USE_LIMIT_ORDER else "Market"
                         tg(f"""〰️ {sym} 진입 [약한추세/{sig}] ({order_type_str})
 모드: 약한추세
-가격: ${ind['price']:,.2f}
-비중: {WEAK_SIZE_PCT*100:.0f}% (${margin:,.0f})
+가격: ${price_now:,.2f}
+비중: {act_size*100:.0f}% (${margin:,.0f})
 ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
 익절: +{WEAK_TP_PCT*100:.1f}% | 손절: -{WEAK_SL_PCT*100:.1f}%""")
 
