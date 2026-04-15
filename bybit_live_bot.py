@@ -36,6 +36,7 @@ import os, sys, traceback, json
 import requests
 import pytz
 
+sys.stdout.reconfigure(line_buffering=True)
 KST = pytz.timezone("Asia/Seoul")
 def now_kst(): return datetime.now(KST)
 
@@ -87,7 +88,7 @@ FLASH_CRASH      = float(os.environ.get("FLASH_CRASH", "0.025"))      # 급락 �
 
 # ── v5.5 추가: 약한추세 전략 ──
 WEAK_ENABLED  = os.environ.get("WEAK_ENABLED", "true").lower() == "true"
-WEAK_SIZE_PCT = float(os.environ.get("WEAK_SIZE_PCT", "0.25"))   # 비중 25% (v6.0)
+WEAK_SIZE_PCT = 0.30  # v6.1: 30% (SIDEWAYS off 보완, 하드코딩)
 WEAK_TP_PCT   = float(os.environ.get("WEAK_TP_PCT",   "0.008"))  # 익절 +0.8%
 WEAK_SL_PCT   = float(os.environ.get("WEAK_SL_PCT",   "0.005"))  # 손절 -0.5%
 WEAK_TRAIL_ACT= float(os.environ.get("WEAK_TRAIL_ACT","0.005"))  # 트레일 활성 +0.5%
@@ -512,6 +513,8 @@ def init_session():
         except Exception:
             pass
 
+_last_balance = 0.0  # v6.1: 잔고 조회 실패 대비
+
 def get_balance() -> float:
     try:
         r = session.get_wallet_balance(accountType="UNIFIED")
@@ -583,6 +586,9 @@ def place_order(symbol: str, side: str, qty: float, atr: float = 0.0) -> bool:
                               "XRPUSDT": 4, "LINKUSDT": 3}
             pd_ = price_decimals.get(symbol, 2)
             limit_price = round(limit_price, pd_)
+            # v6.1: 서버사이드 재해 스톱 (-6% 가격, 봇 죽어도 동작)
+            sl_price = limit_price * (0.94 if side == "Buy" else 1.06)
+            sl_price = round(sl_price, pd_)
             r = session.place_order(
                 category="linear",
                 symbol=symbol,
@@ -592,6 +598,7 @@ def place_order(symbol: str, side: str, qty: float, atr: float = 0.0) -> bool:
                 price=str(limit_price),
                 timeInForce="GTC",
                 positionIdx=_get_position_idx(side),
+                stopLoss=str(sl_price),
             )
             if r["retCode"] == 0:
                 order_id = r["result"].get("orderId", "")
@@ -602,7 +609,14 @@ def place_order(symbol: str, side: str, qty: float, atr: float = 0.0) -> bool:
                 return True
             return False
         else:
-            r = session.place_order(
+            # v6.1: Market 진입 + 서버사이드 재해 스톱
+            mk_price = get_price(symbol)
+            price_decimals = {"BTCUSDT": 1, "ETHUSDT": 2, "SOLUSDT": 3,
+                              "XRPUSDT": 4, "LINKUSDT": 3}
+            pd_ = price_decimals.get(symbol, 2)
+            sl_price = mk_price * (0.94 if side == "Buy" else 1.06) if mk_price > 0 else 0
+            sl_price = round(sl_price, pd_) if sl_price > 0 else 0
+            kwargs = dict(
                 category="linear",
                 symbol=symbol,
                 side=side,
@@ -610,6 +624,9 @@ def place_order(symbol: str, side: str, qty: float, atr: float = 0.0) -> bool:
                 qty=str(qty),
                 positionIdx=_get_position_idx(side),
             )
+            if sl_price > 0:
+                kwargs["stopLoss"] = str(sl_price)
+            r = session.place_order(**kwargs)
             return r["retCode"] == 0
     except Exception as e:
         print(f"[주문 오류 {symbol}] {e}")
@@ -759,7 +776,8 @@ def detect_mode(ind: dict, current_mode: str = "") -> str:
         if adx >= ADX_STRONG_HOLD and bb_width > BB_STRONG and di_gap > DI_GAP:
             return "strong_trend"
     # 횡보 유지: 진입 ADX<20, 이탈은 ADX>23 (ADX_SIDEWAYS_HOLD)
-    if current_mode == "sideways":
+    # v6.1: SIDEWAYS 히스테리시스 비활성
+    if False and current_mode == "sideways":
         if adx <= ADX_SIDEWAYS_HOLD and 0.015 < bb_width < BB_SIDEWAYS:
             return "sideways"
 
@@ -768,7 +786,8 @@ def detect_mode(ind: dict, current_mode: str = "") -> str:
         return "strong_trend"
 
     # 횡보: ADX 낮고 BB 좁지만 최소 1.5% 이상이어야 진입 의미있음
-    if adx < ADX_SIDEWAYS and 0.015 < bb_width < BB_SIDEWAYS:
+    # v6.1: SIDEWAYS 신규 진입 비활성 (WEAK가 커버)
+    if False and adx < ADX_SIDEWAYS and 0.015 < bb_width < BB_SIDEWAYS:
         return "sideways"
 
     # 약한추세 (v5.5): ADX 20~32, 방향성 있지만 강하지 않은 구간
@@ -1064,10 +1083,17 @@ def run_loop():
             # ── 텔레그램 업데이트 폴링 ──
             poll_telegram_updates()
 
+            global _last_balance  # v6.1
             balance = get_balance()
             if balance <= 0:
-                time.sleep(LOOP_SEC)
-                continue
+                if _last_balance > 0:
+                    balance = _last_balance
+                    print(f"[경고] 잔고 조회 실패 → 마지막 정상값 사용: {balance:.2f}")
+                else:
+                    time.sleep(LOOP_SEC)
+                    continue
+            else:
+                _last_balance = balance
 
             # 월초 잔고 초기화
             if monthly_start <= 0:
