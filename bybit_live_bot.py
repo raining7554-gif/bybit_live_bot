@@ -586,8 +586,8 @@ def place_order(symbol: str, side: str, qty: float, atr: float = 0.0) -> bool:
                               "XRPUSDT": 4, "LINKUSDT": 3}
             pd_ = price_decimals.get(symbol, 2)
             limit_price = round(limit_price, pd_)
-            # v6.1: 서버사이드 재해 스톱 (-6% 가격, 봇 죽어도 동작)
-            sl_price = limit_price * (0.94 if side == "Buy" else 1.06)
+            # v6.1: 서버사이드 재해 스톱 (-2% 가격, 봇 죽어도 동작)
+            sl_price = limit_price * (0.98 if side == "Buy" else 1.02)
             sl_price = round(sl_price, pd_)
             r = session.place_order(
                 category="linear",
@@ -614,7 +614,7 @@ def place_order(symbol: str, side: str, qty: float, atr: float = 0.0) -> bool:
             price_decimals = {"BTCUSDT": 1, "ETHUSDT": 2, "SOLUSDT": 3,
                               "XRPUSDT": 4, "LINKUSDT": 3}
             pd_ = price_decimals.get(symbol, 2)
-            sl_price = mk_price * (0.94 if side == "Buy" else 1.06) if mk_price > 0 else 0
+            sl_price = mk_price * (0.98 if side == "Buy" else 1.02) if mk_price > 0 else 0
             sl_price = round(sl_price, pd_) if sl_price > 0 else 0
             kwargs = dict(
                 category="linear",
