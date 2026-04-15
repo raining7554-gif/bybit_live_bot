@@ -54,7 +54,7 @@ SYMBOLS       = ["BTCUSDT", "ETHUSDT"]  # v6.0: BTC+ETH 집중
 LEVERAGE      = int(os.environ.get("LEVERAGE", "12"))  # v6.0: 12배
 MAX_POSITIONS = int(os.environ.get("MAX_POSITIONS", "2"))  # v6.0: BTC+ETH 2개
 MAX_SAME_DIR  = int(os.environ.get("MAX_SAME_DIR", "2"))  # v6.0: 동방향 2개
-LOOP_SEC      = 20  # v5.5: 20초 루프 (Rate Limit 방지)
+LOOP_SEC      = 30  # v6.0: 30초 루프 (Rate Limit 강화 방지)
 MIN_HOLD_SEC  = 180
 
 # ── 시장 판단 기준 (환경변수로 에이전트가 조정 가능) ──
@@ -497,7 +497,9 @@ def init_session():
     session = HTTP(
         testnet=TESTNET,
         api_key=API_KEY,
-        api_secret=API_SECRET
+        api_secret=API_SECRET,
+        max_retries=0,   # v6.0: pybit 내부 재시도 끔 (rate limit 루프 방지)
+        retry_delay=5    # v6.0: 재시도 간격 5초
     )
     for sym in SYMBOLS:
         try:
