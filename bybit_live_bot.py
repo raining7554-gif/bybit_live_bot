@@ -498,7 +498,7 @@ def init_session():
         testnet=TESTNET,
         api_key=API_KEY,
         api_secret=API_SECRET,
-        max_retries=0,   # v6.0: pybit 내부 재시도 끔 (rate limit 루프 방지)
+        max_retries=3,   # v6.0: pybit 내부 재시도 끔 (rate limit 루프 방지)
         retry_delay=5    # v6.0: 재시도 간격 5초
     )
     for sym in SYMBOLS:
