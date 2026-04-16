@@ -501,22 +501,28 @@ MDD: ${m7['mdd']:.2f}
 # ══════════════════════════════════════════════════
 def init_session():
     global session
+    print(f"[{now_kst().strftime('%H:%M:%S')}] 🔧 init_session 시작", flush=True)
     session = HTTP(
         testnet=TESTNET,
         api_key=API_KEY,
         api_secret=API_SECRET,
         max_retries=3,   # v6.0: pybit 내부 재시도 끔 (rate limit 루프 방지)
-        retry_delay=5    # v6.0: 재시도 간격 5초
+        retry_delay=5,   # v6.0: 재시도 간격 5초
+        timeout=10       # v6.3: HTTP timeout 10초 (hang 방지)
     )
+    print(f"[{now_kst().strftime('%H:%M:%S')}] ✓ HTTP 세션 생성 완료", flush=True)
     for sym in SYMBOLS:
         try:
+            print(f"[{now_kst().strftime('%H:%M:%S')}] {sym} set_leverage 시도...", flush=True)
             session.set_leverage(
                 category="linear",
                 symbol=sym,
                 buyLeverage=str(LEVERAGE),
                 sellLeverage=str(LEVERAGE)
             )
-        except Exception:
+            print(f"[{now_kst().strftime('%H:%M:%S')}] ✓ {sym} leverage={LEVERAGE}x 설정 완료", flush=True)
+        except Exception as _e:
+            print(f"[{now_kst().strftime('%H:%M:%S')}] {sym} leverage 설정 오류 (무시): {_e}", flush=True)
             pass
 
 _last_balance = 0.0  # v6.1: 잔고 조회 실패 대비
@@ -1085,10 +1091,18 @@ def run_loop():
 동적비중: {"ON" if DYN_SIZE_ENABLED else "OFF"}
 테스트넷: {TESTNET}""")
 
+    # v6.3: 명시적 루프 진입 로그 (봇 살아있음 확인용)
+    print(f"[{now_kst().strftime('%H:%M:%S')}] ⚡ run_loop() 진입 — 메인 루프 시작", flush=True)
+    tg(f"⚡ v6.3 메인 루프 진입 확인 ({now_kst().strftime('%H:%M')})")
+
     while True:
         try:
             loop_count += 1
             update_cooldown()
+
+            # v6.3: 10루프마다 하트비트 로그 (약 5분마다, 봇 살아있음 증거)
+            if loop_count % 10 == 1:
+                print(f"[{now_kst().strftime('%H:%M:%S')}] 💓 loop #{loop_count} alive | positions={len(positions)}", flush=True)
 
             # ── 텔레그램 업데이트 폴링 ──
             poll_telegram_updates()
@@ -1611,16 +1625,28 @@ if __name__ == "__main__":
 
     print(f"""
 ╔══════════════════════════════════════╗
-║   바이비트 봇 v6.0 (BTC+ETH 집중)     ║
+║   바이비트 봇 v6.3 (R:R 개선)         ║
 ║   3모드 전략 (추세/횡보/관망)           ║
-║   BTC + ETH 12x / 50%                ║
+║   BTC + ETH {LEVERAGE}x / {int(ST_SIZE_PCT*100)}%              ║
 ╚══════════════════════════════════════╝
 심볼: {SYMBOLS}
 레버리지: {LEVERAGE}배
 강한추세: 비중{ST_SIZE_PCT*100:.0f}% 손절{ST_SL_PCT*100:.1f}% 트레일+{ST_TRAIL_ACT*100:.1f}%
 횡보:     비중{SW_SIZE_PCT*100:.0f}% 익절{SW_TP_PCT*100:.1f}% 손절{SW_SL_PCT*100:.1f}%
 월한도:   -{MONTHLY_MAX_LOSS*100:.0f}%
-""")
+""", flush=True)
 
-    init_session()
-    run_loop()
+    try:
+        init_session()
+        print(f"[{now_kst().strftime('%H:%M:%S')}] ✅ init_session() 완료 → run_loop() 호출", flush=True)
+        run_loop()
+    except Exception as _e:
+        import traceback
+        err_msg = traceback.format_exc()
+        print(f"[FATAL] 봇 시작 중 예외: {_e}", flush=True)
+        print(err_msg, flush=True)
+        try:
+            tg(f"🚨 봇 시작 실패\n{str(_e)[:200]}")
+        except Exception:
+            pass
+        sys.exit(1)
