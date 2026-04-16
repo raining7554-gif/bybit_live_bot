@@ -1558,44 +1558,44 @@ BB위치: {ind['bb_pos']*100:.0f}% | RSI: {ind['rsi']:.0f}
 ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}%
 익절: +{WEAK_TP_PCT*100:.1f}% | 손절: -{WEAK_SL_PCT*100:.1f}%""")
 
-            # ── 정각 리포트 ──
-            now_dt = datetime.now(KST)
-            if now_dt.minute == 0 and now_dt.second < 25:
-                now_ts = time.time()
-                if now_ts - last_report >= 3500:  # 중복 방지
-                    last_report = now_ts
-                    open_pos = get_open_positions()
-                    balance  = get_balance()
-                    monthly_pnl = (balance - monthly_start) / monthly_start * 100 if monthly_start > 0 else 0
+            # ── 시간 기반 리포트 (v6.3: 25초 창 놓침 이슈 해결) ──
+            # 마지막 리포트 이후 3600초(1시간) 경과 시 실행
+            now_ts = time.time()
+            if now_ts - last_report >= 3600:
+                last_report = now_ts
+                now_dt = datetime.now(KST)
+                open_pos = get_open_positions()
+                balance  = get_balance()
+                monthly_pnl = (balance - monthly_start) / monthly_start * 100 if monthly_start > 0 else 0
 
-                    pos_lines = ""
-                    for sym, p in open_pos.items():
-                        side_kr = "롱" if p["side"] == "Buy" else "숏"
-                        pos_lines += f"\n  {sym} {side_kr} PnL: ${p['pnl']:+.2f}"
+                pos_lines = ""
+                for sym, p in open_pos.items():
+                    side_kr = "롱" if p["side"] == "Buy" else "숏"
+                    pos_lines += f"\n  {sym} {side_kr} PnL: ${p['pnl']:+.2f}"
 
-                    # 전략별 성과
-                    stats_lines = ""
-                    mode_kr = {"strong_trend":"강한추세","sideways":"횡보","weak_trend":"약한추세"}
-                    for m, kr in mode_kr.items():
-                        st = trade_stats.get(m, {})
-                        w = st.get("wins", 0); l = st.get("losses", 0); tot = w + l
-                        if tot > 0:
-                            wr = w / tot * 100
-                            pnl_sum = st.get("total_pnl", 0)
-                            stats_lines += f"\n  {kr}: {tot}회 승률{wr:.0f}% 누적${pnl_sum:+.1f}"
+                # 전략별 성과
+                stats_lines = ""
+                mode_kr = {"strong_trend":"강한추세","sideways":"횡보","weak_trend":"약한추세"}
+                for m, kr in mode_kr.items():
+                    st = trade_stats.get(m, {})
+                    w = st.get("wins", 0); l = st.get("losses", 0); tot = w + l
+                    if tot > 0:
+                        wr = w / tot * 100
+                        pnl_sum = st.get("total_pnl", 0)
+                        stats_lines += f"\n  {kr}: {tot}회 승률{wr:.0f}% 누적${pnl_sum:+.1f}"
 
-                    m7 = compute_metrics(7)
-                    if m7:
-                        metrics_line = (
-                            f"\n─────────────────"
-                            f"\n📈 7일 메트릭"
-                            f"\n  거래: {m7['total']}회 | 승률: {m7['win_rate']*100:.0f}%"
-                            f"\n  누적: ${m7['total_pnl']:+.1f} | MDD: ${m7['mdd']:.1f}"
-                            f"\n  샤프: {m7['sharpe']:.2f}"
-                        )
-                    else:
-                        metrics_line = ""
-                    tg(f"""📊 {now_dt.strftime('%H:%M')} 리포트
+                m7 = compute_metrics(7)
+                if m7:
+                    metrics_line = (
+                        f"\n─────────────────"
+                        f"\n📈 7일 메트릭"
+                        f"\n  거래: {m7['total']}회 | 승률: {m7['win_rate']*100:.0f}%"
+                        f"\n  누적: ${m7['total_pnl']:+.1f} | MDD: ${m7['mdd']:.1f}"
+                        f"\n  샤프: {m7['sharpe']:.2f}"
+                    )
+                else:
+                    metrics_line = ""
+                tg(f"""📊 {now_dt.strftime('%H:%M')} 리포트
 잔고: ${balance:,.2f}
 월 손익: {monthly_pnl:+.1f}%
 포지션: {len(open_pos)}개{pos_lines}
