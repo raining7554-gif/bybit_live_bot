@@ -1,10 +1,11 @@
 """
-바이비트 선물 실전 봇 v6.0
+바이비트 선물 실전 봇 v6.1
 ══════════════════════════════════════════════════
 심볼: BTCUSDT / ETHUSDT (집중 운용)
 레버리지: 12배
 
 [v6.0 변경] BTC+ETH 2종목 집중, 50% 사이즈, 12x, 피라미딩 OFF
+[v6.1 변경] 트레일 하향(0.5%), di_gap 버그수정, 코인별ADX, BB익절70%, 피라미딩상한60%
 
 v5.0 → v5.1 변경사항
 ──────────────────────────
@@ -297,11 +298,11 @@ def compute_metrics(days: int = 7) -> dict:
 # 레버리지 10배 기준: 레버수익% / 10 = 실제가격%
 # v5.5b: 타이트하게 조임 → 수익 더 빨리 보호
 TRAIL_LEVELS = [
-    (0.008, 0.002),   # 실제+0.8%(레버8%)  → 콜백 0.2% (v5.8: +0.3→0.8 상향)
-    (0.012, 0.003),   # 실제+1.2%(레버12%) → 콜백 0.3% (v5.8: +0.7→1.2 상향)
-    (0.020, 0.005),   # 실제+2.0%(레버20%) → 콜백 0.5% (v5.8: +1.5→2.0 상향)
-    (0.030, 0.008),   # 실제+3.0%(레버30%) → 콜백 0.8% (v5.8: +2.5→3.0 상향)
-    (0.055, 0.015),   # 실제+5.5%(레버55%) → 콜백 1.5% (v5.8: +5.0→5.5 상향)
+    (0.005, 0.0015),  # 실제+0.5%(레버6%)  → 콜백 0.15% (v6.1: 빠른 수익 보호)
+    (0.010, 0.003),   # 실제+1.0%(레버12%) → 콜백 0.3%  (v6.1: 하향)
+    (0.020, 0.005),   # 실제+2.0%(레버24%) → 콜백 0.5%
+    (0.030, 0.008),   # 실제+3.0%(레버36%) → 콜백 0.8%
+    (0.055, 0.015),   # 실제+5.5%(레버66%) → 콜백 1.5%
 ]
 
 # ══════════════════════════════════════════════════
@@ -746,16 +747,20 @@ def calc_indicators(df: pd.DataFrame) -> dict:
 # ══════════════════════════════════════════════════
 # 시장 모드 판단
 # ══════════════════════════════════════════════════
-def detect_mode(ind: dict, current_mode: str = "") -> str:
+def detect_mode(ind: dict, current_mode: str = "", symbol: str = "") -> str:
     """
     strong_trend : 강한 추세 → 추세 추종 전략
     sideways     : 횡보      → BB 역추세 전략
     high_vol     : 고변동성  → 관망
     unclear      : 애매      → 관망
     v5.8: current_mode 파라미터로 히스테리시스 적용
+    v6.1: symbol 파라미터로 코인별 ADX 임계값 적용
     """
     if not ind:
         return "unclear"
+
+    # v6.1: 코인별 ADX_STRONG 임계값
+    sym_adx_strong = get_sym_cfg(symbol)["adx_strong"] if symbol else ADX_STRONG
 
     adx       = ind["adx"]
     bb_width  = ind["bb_width"]
@@ -781,8 +786,8 @@ def detect_mode(ind: dict, current_mode: str = "") -> str:
         if adx <= ADX_SIDEWAYS_HOLD and 0.015 < bb_width < BB_SIDEWAYS:
             return "sideways"
 
-    # 강한 추세 신규 진입
-    if adx > ADX_STRONG and bb_width > BB_STRONG and di_gap > DI_GAP:
+    # 강한 추세 신규 진입 (v6.1: 코인별 ADX 임계값)
+    if adx > sym_adx_strong and bb_width > BB_STRONG and di_gap > DI_GAP:
         return "strong_trend"
 
     # 횡보: ADX 낮고 BB 좁지만 최소 1.5% 이상이어야 진입 의미있음
@@ -791,7 +796,7 @@ def detect_mode(ind: dict, current_mode: str = "") -> str:
         return "sideways"
 
     # 약한추세 (v5.5): ADX 20~32, 방향성 있지만 강하지 않은 구간
-    di_gap = abs(ind.get("di_plus", 0) - ind.get("di_minus", 0))
+    # v6.1: di_gap 중복 계산 버그 수정 (L768에서 이미 계산됨)
     if ADX_WEAK_MIN <= adx <= ADX_WEAK_MAX and di_gap > 6 and WEAK_ENABLED:
         return "weak_trend"
 
@@ -903,15 +908,15 @@ def get_sideways_signal(ind: dict) -> str:
     rdt = ind["rsi"] < ind["rsi_h5"] * 0.97
     rdb = ind["rsi"] > ind["rsi_l5"] * 1.03
 
-    # BB 상단 → 숏 (SHORT_STRICT_MODE: BB 92% + RSI 65 이상으로 강화)
-    bb_short_thr = BB_POS_SHORT if SHORT_STRICT_MODE else 0.88
-    rsi_short_thr = RSI_SHORT_SW if SHORT_STRICT_MODE else 60
+    # BB 상단 → 숏 (v6.1: 0.88→0.85, RSI 60→58 완화)
+    bb_short_thr = BB_POS_SHORT if SHORT_STRICT_MODE else 0.85
+    rsi_short_thr = RSI_SHORT_SW if SHORT_STRICT_MODE else 58
     if ind["bb_pos"] > bb_short_thr and ind["rsi"] > rsi_short_thr:
         if sum([vw, uw, rdt]) >= 2:
             return "SHORT"
 
-    # BB 하단 → 롱 (3개 조건 중 2개)
-    if ind["bb_pos"] < 0.12 and ind["rsi"] < 40:
+    # BB 하단 → 롱 (v6.1: 0.12→0.15, RSI 40→42 완화)
+    if ind["bb_pos"] < 0.15 and ind["rsi"] < 42:
         if sum([vw, lw, rdb]) >= 2:
             return "LONG"
 
@@ -1149,8 +1154,16 @@ def run_loop():
                     if entry_ts > 0 and (time.time() - entry_ts) < MIN_HOLD_SEC:
                         reason = ""  # 최소 보유시간 미경과 → 청산 보류
 
-                # ── v5.8 피라미딩 (2단계 세분화) ──
+                # ── v6.1 피라미딩 (2단계 세분화 + 총비중 상한 60%) ──
                 if PYR_ENABLED and not reason:
+                    # v6.1: 총 비중 상한 체크
+                    total_notional = sum(
+                        p.get("size", 0) * get_price(s)
+                        for s, p in open_pos.items()
+                    )
+                    max_notional = balance * 0.60 * LEVERAGE
+                    pyr_allowed = total_notional < max_notional
+
                     entry_p = local_pos.get("entry", price)
                     side    = local_pos.get("side", "Buy")
                     cur_pnl = (price - entry_p) / entry_p if side == "Buy" else (entry_p - price) / entry_p
@@ -1174,12 +1187,12 @@ def run_loop():
                         except Exception as e:
                             print(f"[피라미딩 오류] {e}")
 
-                    # 1차: +1% 도달 시
-                    if not pyr_s1 and cur_pnl >= PYRAMID_STEP1:
+                    # 1차: +1% 도달 시 (v6.1: pyr_allowed 체크)
+                    if pyr_allowed and not pyr_s1 and cur_pnl >= PYRAMID_STEP1:
                         _do_pyramid(PYRAMID_SIZE1, "#1(+1%→+15%)")
                         local_pos["pyr_s1"] = True
                     # 2차: +3% 도달 시 (1차 완료 후)
-                    elif pyr_s1 and not pyr_s2 and cur_pnl >= PYRAMID_STEP2:
+                    elif pyr_allowed and pyr_s1 and not pyr_s2 and cur_pnl >= PYRAMID_STEP2:
                         _do_pyramid(PYRAMID_SIZE2, "#2(+3%→+20%)")
                         local_pos["pyr_s2"] = True
 
@@ -1250,7 +1263,7 @@ def run_loop():
 
                 # 모드 판단 (히스테리시스: 이전 모드 전달)
                 cur_sym_mode = prev_mode.get(sym, "")
-                m15   = detect_mode(ind, current_mode=cur_sym_mode)
+                m15   = detect_mode(ind, current_mode=cur_sym_mode, symbol=sym)
                 m1h, ind1h = get_h1_mode(sym)
                 fmode = get_final_mode(m15, m1h)
 
@@ -1451,11 +1464,11 @@ ADX: {ind['adx']:.1f} | BB폭: {ind['bb_width']*100:.2f}% | 거래량: {ind['vol
                         continue
                     sw_act_size = _apply_dir_mult(sw_base, order_side)
 
-                    # BB 기반 동적 익절
+                    # v6.1: BB 중간선까지 70% 거리로 동적 익절 (더 현실적)
                     if sig == "LONG":
-                        raw_tp = (bb_up_val - price_now) / price_now if price_now > 0 else SW_TP_MIN
+                        raw_tp = (ind["bb_mid"] - price_now) / price_now * 0.70 if price_now > 0 else SW_TP_MIN
                     else:
-                        raw_tp = (price_now - bb_low_val) / price_now if price_now > 0 else SW_TP_MIN
+                        raw_tp = (price_now - ind["bb_mid"]) / price_now * 0.70 if price_now > 0 else SW_TP_MIN
                     sw_tp = max(SW_TP_MIN, min(SW_TP_MAX, raw_tp))
 
                     qty = calc_qty(balance, sw_act_size, price_now, sym)
