@@ -1,8 +1,23 @@
 """
-바이비트 선물 실전 봇 v6.3a
+바이비트 선물 실전 봇 v6.3b
 ══════════════════════════════════════════════════
 심볼: BTCUSDT / ETHUSDT (집중 운용)
 레버리지: 12배
+
+[v6.3b 변경] A안 - 핵심 필터 추가 (BB 상단 롱 물림 방지)
+  ★ 1. RSI 필터 강화 (get_pullback_signal)
+       - LONG: RSI < 65 → RSI < 60 (상단권 차단)
+       - SHORT: RSI > 35 → RSI > 40 (하단권 차단)
+  ★ 2. BB 위치 필터 추가 (get_strong_trend_signal)
+       - LONG: bb_pos < 0.65 조건 추가 (상단권 롱 차단)
+       - SHORT: bb_pos > 0.35 조건 추가 (하단권 숏 차단)
+  ★ 3. sideways 조건 완화 (detect_mode)
+       - ADX 20 → 22 (진입 허용)
+       - BB 폭 0.015~0.022 → 0.010~0.028 (범위 확대)
+       - 히스테리시스도 동일하게 완화
+  ★ 4. Limit 주문 수정 (미체결 폭발 방지)
+       - LIMIT_OFFSET_ATR: 0.1 → 0.05 (체결률 ↑)
+       - LIMIT_TIMEOUT_SEC: 30 → 60 (여유 시간)
 
 [v6.3a 변경] 데이터 저장소를 /data 볼륨으로 이동 + /export, /today 명령어 추가
   - TRADE_LOG_PATH: /tmp/trades.jsonl → /data/trades.jsonl (재배포에도 유지)
@@ -109,8 +124,8 @@ RSI_SHORT_SW       = float(os.environ.get("RSI_SHORT_SW",      "65"))   # 횡보
 
 # ── v5.6 추가: Limit 주문 ──
 USE_LIMIT_ORDER    = os.environ.get("USE_LIMIT_ORDER", "true").lower() == "true"
-LIMIT_OFFSET_ATR   = float(os.environ.get("LIMIT_OFFSET_ATR",  "0.1"))  # ATR * 0.1 offset
-LIMIT_TIMEOUT_SEC  = int(os.environ.get("LIMIT_TIMEOUT_SEC",   "30"))   # 30초 미체결 취소
+LIMIT_OFFSET_ATR   = float(os.environ.get("LIMIT_OFFSET_ATR",  "0.05"))  # v6.3b: 0.1→0.05 (체결률 ↑)
+LIMIT_TIMEOUT_SEC  = int(os.environ.get("LIMIT_TIMEOUT_SEC",   "60"))    # v6.3b: 30→60 (여유 시간)
 
 # ── v5.7 추가: ATR 기반 동적 손절 ──
 SL_ATR_MULT    = float(os.environ.get("SL_ATR_MULT",   "1.2"))   # v6.3: 1.5→1.2 (ATR 배수 축소)
@@ -859,19 +874,19 @@ def detect_mode(ind: dict, current_mode: str = "", symbol: str = "") -> str:
     if current_mode == "strong_trend":
         if adx >= ADX_STRONG_HOLD and bb_width > BB_STRONG and di_gap > DI_GAP:
             return "strong_trend"
-    # 횡보 유지: 진입 ADX<20, 이탈은 ADX>23 (ADX_SIDEWAYS_HOLD)
-    # v6.2: SIDEWAYS 히스테리시스 재활성
+    # 횡보 유지: v6.3b - 범위 확대 (0.010 < BB < 0.028)
     if current_mode == "sideways":
-        if adx <= ADX_SIDEWAYS_HOLD and 0.015 < bb_width < BB_SIDEWAYS:
+        if adx <= ADX_SIDEWAYS_HOLD and 0.010 < bb_width < 0.028:
             return "sideways"
 
     # 강한 추세 신규 진입 (v6.1: 코인별 ADX 임계값)
     if adx > sym_adx_strong and bb_width > BB_STRONG and di_gap > DI_GAP:
         return "strong_trend"
 
-    # 횡보: ADX 낮고 BB 좁지만 최소 1.5% 이상이어야 진입 의미있음
-    # v6.2: SIDEWAYS 재활성 (비중 축소로 리스크 관리)
-    if adx < ADX_SIDEWAYS and 0.015 < bb_width < BB_SIDEWAYS:
+    # 횡보: v6.3b - 조건 완화로 실제 발동되게 함
+    # 기존: ADX < 20 + 0.015 < BB < 0.022 (13거래 중 0회 발동)
+    # 변경: ADX < 22 + 0.010 < BB < 0.028 (실제 횡보장 포착)
+    if adx < 22 and 0.010 < bb_width < 0.028:
         return "sideways"
 
     # 약한추세 (v5.5): ADX 20~32, 방향성 있지만 강하지 않은 구간
@@ -951,12 +966,18 @@ def get_pullback_signal(ind15: dict, ind1h: dict) -> str:
     h1_uptrend   = ema20_1h > ema50_1h
     h1_downtrend = ema20_1h < ema50_1h
 
-    # 추가 필터: RSI 과열/과매도 제외
-    if h1_uptrend   and ind15["rsi"] < 65:
+    # v6.3b: RSI 필터 강화 - BB 상단/하단 진입 차단
+    # 기존: LONG RSI < 65, SHORT RSI > 35 (상/하단권에서도 진입 허용됨 → 물림)
+    # 변경: LONG RSI < 60, SHORT RSI > 40 (과열/과매도 구간 진입 차단)
+    # + bb_pos 추가 필터: LONG은 bb_pos < 0.65, SHORT은 bb_pos > 0.35
+    bb_pos_15 = ind15.get("bb_pos", 0.5)
+
+    # 추가 필터: RSI 과열/과매도 제외 + BB 위치 확인
+    if h1_uptrend   and ind15["rsi"] < 60 and bb_pos_15 < 0.65:
         return "LONG"
-    if h1_downtrend and ind15["rsi"] > 35 and not SHORT_STRICT_MODE:
+    if h1_downtrend and ind15["rsi"] > 40 and bb_pos_15 > 0.35 and not SHORT_STRICT_MODE:
         return "SHORT"
-    if h1_downtrend and ind15["rsi"] > 35 and SHORT_STRICT_MODE and ind15["adx"] >= ADX_SHORT_STRONG:
+    if h1_downtrend and ind15["rsi"] > 40 and bb_pos_15 > 0.35 and SHORT_STRICT_MODE and ind15["adx"] >= ADX_SHORT_STRONG:
         return "SHORT"
     return "NONE"
 
@@ -964,16 +985,22 @@ def get_pullback_signal(ind15: dict, ind1h: dict) -> str:
 # 진입 신호
 # ══════════════════════════════════════════════════
 def get_strong_trend_signal(ind: dict) -> str:
-    """강한 추세 진입 신호: LONG / SHORT / NONE"""
+    """강한 추세 진입 신호: LONG / SHORT / NONE
+    v6.3b: BB 위치 필터 추가 (BB 상단에서 롱 / 하단에서 숏 차단)
+    """
     ema_long  = ind["ema20"] > ind["ema50"]
     ema_short = ind["ema20"] < ind["ema50"]
     di_long   = ind["di_plus"]  > ind["di_minus"] + DI_GAP
     di_short  = ind["di_minus"] > ind["di_plus"]  + DI_GAP
+    bb_pos    = ind.get("bb_pos", 0.5)  # v6.3b: BB 위치
 
-    long_ok  = ema_long  and di_long  and ind["rsi"] < 68
-    # SHORT_STRICT_MODE: 숏은 ADX_SHORT_STRONG(35) 이상일 때만 허용
+    # v6.3b: BB 위치 조건 추가
+    # LONG: BB 중간 이하(0.65 이하)에서만 진입 → BB 상단 뒤늦은 롱 차단
+    # SHORT: BB 중간 이상(0.35 이상)에서만 진입 → BB 하단 뒤늦은 숏 차단
+    long_ok  = ema_long  and di_long  and ind["rsi"] < 68 and bb_pos < 0.65
+    # SHORT_STRICT_MODE: 숏은 ADX_SHORT_STRONG(28) 이상일 때만 허용
     adx_short_ok = ind["adx"] >= ADX_SHORT_STRONG if SHORT_STRICT_MODE else True
-    short_ok = ema_short and di_short and ind["rsi"] > 32 and adx_short_ok
+    short_ok = ema_short and di_short and ind["rsi"] > 32 and bb_pos > 0.35 and adx_short_ok
 
     if long_ok:  return "LONG"
     if short_ok: return "SHORT"
@@ -1146,7 +1173,7 @@ def run_loop():
     last_report = time.time()
     REPORT_SEC = 3600  # 1시간마다 리포트
 
-    tg(f"""🚀 바이비트 봇 v6.3a 시작 (BTC+ETH 집중)
+    tg(f"""🚀 바이비트 봇 v6.3b 시작 (A안 - 필터 강화)
 심볼: {', '.join(SYMBOLS)}
 레버리지: {LEVERAGE}배
 최대포지션: {MAX_POSITIONS}
@@ -1160,12 +1187,18 @@ def run_loop():
 거래로그: {TRADE_LOG_PATH}
 테스트넷: {TESTNET}
 ━━━━━━━━━━━━━━
+🆕 v6.3b 개선사항
+• RSI 필터: LONG<60 / SHORT>40
+• BB 위치: LONG<0.65 / SHORT>0.35
+• 횡보 조건 완화 (ADX<22, BB 0.010~0.028)
+• Limit 체결률 개선 (offset 0.05, 60초)
+━━━━━━━━━━━━━━
 📋 명령어:
 /stats /export /today /strategy""")
 
     # v6.3: 명시적 루프 진입 로그 (봇 살아있음 확인용)
     print(f"[{now_kst().strftime('%H:%M:%S')}] ⚡ run_loop() 진입 — 메인 루프 시작", flush=True)
-    tg(f"⚡ v6.3a 메인 루프 진입 확인 ({now_kst().strftime('%H:%M')})")
+    tg(f"⚡ v6.3b 메인 루프 진입 확인 ({now_kst().strftime('%H:%M')})")
 
     while True:
         try:
@@ -1695,8 +1728,8 @@ if __name__ == "__main__":
 
     print(f"""
 ╔══════════════════════════════════════╗
-║   바이비트 봇 v6.3a (로그 영구저장)     ║
-║   3모드 전략 (추세/횡보/관망)           ║
+║   바이비트 봇 v6.3b (A안 필터 강화)    ║
+║   RSI/BB 필터 + 횡보 완화             ║
 ║   BTC + ETH {LEVERAGE}x / {int(ST_SIZE_PCT*100)}%              ║
 ╚══════════════════════════════════════╝
 심볼: {SYMBOLS}
