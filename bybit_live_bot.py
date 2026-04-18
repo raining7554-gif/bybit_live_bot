@@ -1,33 +1,18 @@
 """
-바이비트 선물 실전 봇 v6.3
+바이비트 선물 실전 봇 v6.3a
 ══════════════════════════════════════════════════
 심볼: BTCUSDT / ETHUSDT (집중 운용)
 레버리지: 12배
+
+[v6.3a 변경] 데이터 저장소를 /data 볼륨으로 이동 + /export, /today 명령어 추가
+  - TRADE_LOG_PATH: /tmp/trades.jsonl → /data/trades.jsonl (재배포에도 유지)
+  - /export: 전체 거래 기록을 텔레그램으로 전송
+  - /today: 오늘 거래 요약
 
 [v6.0 변경] BTC+ETH 2종목 집중, 50% 사이즈, 12x, 피라미딩 OFF
 [v6.1 변경] 트레일 하향(0.5%), di_gap 버그수정, 코인별ADX, BB익절70%, 피라미딩상한60%
 [v6.2 변경] 비중 축소(38/28/22%), 숏 완화(ADX28), 시간대필터 OFF, SIDEWAYS 재활성
 [v6.3 변경] R:R 개선 — 손절 타이트(0.6%), 트레일 느슨(콜백2~3x), 익절 확대(1.2%)
-
-v5.0 → v5.1 변경사항
-──────────────────────────
-[심볼]
-- SOLUSDT 추가 (5개 심볼)
-
-[파라미터 최적화 - 백테스트 기반]
-- ST_SIZE_PCT   : 0.30 → 0.28  (추세 비중 소폭 축소)
-- ST_SL_PCT     : 0.007 → 0.008 (추세 손절 -0.8%로 소폭 완화)
-- SW_SIZE_PCT   : 0.15 → 0.18  (횡보 비중 확대)
-- SW_SL_PCT     : 0.004 → 0.005 (횡보 손절 -0.5%로 소폭 완화)
-- SW_TP_PCT     : 0.008 → 0.010 (횡보 익절 +1.0%로 확대)
-
-[전략 구조 유지]
-- STRONG_TREND : 강한 추세 (ADX>28 + BB>2.5% + DI갭>10)
-- SIDEWAYS     : 횡보 (ADX<20 + BB<2.2% + BB경계 역추세)
-- WATCH        : 관망 (약한추세/고변동/전환구간)
-- 멀티타임프레임 (15분봉 + 1시간봉)
-- 3연속 손절 → 8시간 쿨다운
-- 월별 손실 한도 -15%
 """
 
 from pybit.unified_trading import HTTP
@@ -215,7 +200,19 @@ def get_sym_cfg(symbol: str) -> dict:
 # ══════════════════════════════════════════════════
 # 거래 기록 / 메트릭 (기능 B)
 # ══════════════════════════════════════════════════
-TRADE_LOG_PATH = "/tmp/trades.jsonl"
+# v6.3a: /data 볼륨에 영구 저장 (Railway Volume 필요)
+TRADE_LOG_PATH = os.environ.get("TRADE_LOG_PATH", "/data/trades.jsonl")
+
+# 디렉토리 없으면 생성 + 폴백
+try:
+    os.makedirs(os.path.dirname(TRADE_LOG_PATH), exist_ok=True)
+    # 쓰기 권한 확인
+    with open(TRADE_LOG_PATH, "a") as _f:
+        pass
+    print(f"[v6.3a] 거래 로그 경로: {TRADE_LOG_PATH}", flush=True)
+except Exception as _e:
+    print(f"[v6.3a] /data 쓰기 실패 ({_e}) → /tmp로 폴백", flush=True)
+    TRADE_LOG_PATH = "/tmp/trades.jsonl"
 
 def log_trade(symbol: str, mode: str, side: str, entry: float,
               exit_price: float, pnl: float, pnl_pct: float, reason: str):
@@ -475,6 +472,77 @@ def poll_telegram_updates():
 MDD: ${m7['mdd']:.2f}
 샤프: {m7['sharpe']:.2f}
 코인별:{sym_lines}""")
+                # v6.3a: /export 명령어 추가
+                elif text.strip() == "/export":
+                    try:
+                        with open(TRADE_LOG_PATH) as f:
+                            lines = f.readlines()
+                        if not lines:
+                            tg("/export: 거래 기록 없음")
+                        else:
+                            tg(f"📤 /export: 총 {len(lines)}건 전송 시작\n경로: {TRADE_LOG_PATH}")
+                            chunk = []
+                            chunk_size = 0
+                            for line in lines:
+                                try:
+                                    rec = json.loads(line.strip())
+                                    ts_kst = datetime.fromtimestamp(rec['ts'], KST).strftime('%m/%d %H:%M')
+                                    row = (f"{ts_kst} {rec['symbol']} {rec['mode'][:6]} "
+                                           f"{rec['side']} "
+                                           f"{rec['entry']:.2f}→{rec['exit']:.2f} "
+                                           f"${rec['pnl']:+.2f}({rec['pnl_pct']*100:+.2f}%) "
+                                           f"{rec['reason']}")
+                                except Exception:
+                                    row = line.strip()
+                                if chunk_size + len(row) > 3500:
+                                    tg("\n".join(chunk))
+                                    time.sleep(0.5)  # 텔레그램 rate limit 회피
+                                    chunk = []
+                                    chunk_size = 0
+                                chunk.append(row)
+                                chunk_size += len(row) + 1
+                            if chunk:
+                                tg("\n".join(chunk))
+                            tg(f"✅ /export 완료 ({len(lines)}건)")
+                    except FileNotFoundError:
+                        tg(f"/export: 파일 없음 ({TRADE_LOG_PATH})")
+                    except Exception as e:
+                        tg(f"/export 오류: {str(e)[:200]}")
+                # v6.3a: /today 명령어 추가
+                elif text.strip() == "/today":
+                    try:
+                        today_kst = datetime.now(KST).strftime('%Y-%m-%d')
+                        cnt = 0
+                        pnl_sum = 0.0
+                        wins = 0
+                        lines_today = []
+                        with open(TRADE_LOG_PATH) as f:
+                            for line in f:
+                                try:
+                                    rec = json.loads(line.strip())
+                                    d = datetime.fromtimestamp(rec['ts'], KST).strftime('%Y-%m-%d')
+                                    if d == today_kst:
+                                        cnt += 1
+                                        pnl_sum += rec['pnl']
+                                        if rec['pnl'] >= 0:
+                                            wins += 1
+                                        ts_kst = datetime.fromtimestamp(rec['ts'], KST).strftime('%H:%M')
+                                        lines_today.append(
+                                            f"  {ts_kst} {rec['symbol']} {rec['side']} "
+                                            f"${rec['pnl']:+.2f} {rec['reason']}"
+                                        )
+                                except Exception:
+                                    pass
+                        wr = (wins/cnt*100) if cnt else 0
+                        detail = "\n".join(lines_today) if lines_today else "  (없음)"
+                        tg(f"""📅 오늘 ({today_kst})
+거래: {cnt}회 | 승률: {wr:.0f}%
+손익: ${pnl_sum:+.2f}
+{detail}""")
+                    except FileNotFoundError:
+                        tg(f"/today: 파일 없음 ({TRADE_LOG_PATH})")
+                    except Exception as e:
+                        tg(f"/today 오류: {str(e)[:200]}")
                 continue
 
             # 인라인 버튼 콜백
@@ -1078,7 +1146,7 @@ def run_loop():
     last_report = time.time()
     REPORT_SEC = 3600  # 1시간마다 리포트
 
-    tg(f"""🚀 바이비트 봇 v6.0 시작 (BTC+ETH 집중)
+    tg(f"""🚀 바이비트 봇 v6.3a 시작 (BTC+ETH 집중)
 심볼: {', '.join(SYMBOLS)}
 레버리지: {LEVERAGE}배
 최대포지션: {MAX_POSITIONS}
@@ -1089,11 +1157,15 @@ def run_loop():
 약한추세: {"ON" if WEAK_ENABLED else "OFF"} (비중{WEAK_SIZE_PCT*100:.0f}% 익절{WEAK_TP_PCT*100:.1f}%)
 피라미딩: {"ON" if PYR_ENABLED else "OFF"}
 동적비중: {"ON" if DYN_SIZE_ENABLED else "OFF"}
-테스트넷: {TESTNET}""")
+거래로그: {TRADE_LOG_PATH}
+테스트넷: {TESTNET}
+━━━━━━━━━━━━━━
+📋 명령어:
+/stats /export /today /strategy""")
 
     # v6.3: 명시적 루프 진입 로그 (봇 살아있음 확인용)
     print(f"[{now_kst().strftime('%H:%M:%S')}] ⚡ run_loop() 진입 — 메인 루프 시작", flush=True)
-    tg(f"⚡ v6.3 메인 루프 진입 확인 ({now_kst().strftime('%H:%M')})")
+    tg(f"⚡ v6.3a 메인 루프 진입 확인 ({now_kst().strftime('%H:%M')})")
 
     while True:
         try:
@@ -1143,8 +1215,6 @@ def run_loop():
                 local_pos = positions.get(sym, {})
                 if not local_pos:
                     # v5.5 버그수정: 재시작시 peak를 현재 pnl로 초기화
-                    # 기존: peak=0 → 트레일 활성화 지연
-                    # 수정: 현재 수익률로 peak 초기화 → 즉시 트레일 가능
                     entry_p = api_pos["entry"]
                     if api_pos["side"] == "Buy":
                         cur_pnl = (price - entry_p) / entry_p
@@ -1625,7 +1695,7 @@ if __name__ == "__main__":
 
     print(f"""
 ╔══════════════════════════════════════╗
-║   바이비트 봇 v6.3 (R:R 개선)         ║
+║   바이비트 봇 v6.3a (로그 영구저장)     ║
 ║   3모드 전략 (추세/횡보/관망)           ║
 ║   BTC + ETH {LEVERAGE}x / {int(ST_SIZE_PCT*100)}%              ║
 ╚══════════════════════════════════════╝
@@ -1634,6 +1704,7 @@ if __name__ == "__main__":
 강한추세: 비중{ST_SIZE_PCT*100:.0f}% 손절{ST_SL_PCT*100:.1f}% 트레일+{ST_TRAIL_ACT*100:.1f}%
 횡보:     비중{SW_SIZE_PCT*100:.0f}% 익절{SW_TP_PCT*100:.1f}% 손절{SW_SL_PCT*100:.1f}%
 월한도:   -{MONTHLY_MAX_LOSS*100:.0f}%
+거래로그: {TRADE_LOG_PATH}
 """, flush=True)
 
     try:
