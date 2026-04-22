@@ -389,13 +389,32 @@ def tg(msg: str):
         print(f"[TG] {msg}")
         return
     try:
-        requests.post(
+        r = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
             json={"chat_id": TG_CHAT_ID, "text": msg, "parse_mode": "HTML"},
             timeout=5
         )
+        # v6.3c 디버그: API 실패 로그 (HTML parse error 등)
+        if r.status_code != 200:
+            print(f"[TG Error {r.status_code}] {r.text[:200]} | msg={msg[:100]}", flush=True)
     except Exception as e:
-        print(f"[TG Error] {e}")
+        print(f"[TG Error] {e} | msg={msg[:100]}", flush=True)
+
+def tg_plain(msg: str):
+    """parse_mode 없이 plain text 전송 (시작 배너 등 HTML 예약문자 <>& 포함 메시지용)."""
+    if not TG_TOKEN or not TG_CHAT_ID:
+        print(f"[TG] {msg}")
+        return
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": TG_CHAT_ID, "text": msg},  # parse_mode 없음
+            timeout=5
+        )
+        if r.status_code != 200:
+            print(f"[TG Plain Error {r.status_code}] {r.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"[TG Plain Error] {e}", flush=True)
 
 def tg_send_strategy_menu(chat_id=None):
     """전략 ON/OFF 인라인 버튼 메시지 발송"""
@@ -1252,7 +1271,8 @@ def run_loop():
     last_report = time.time()
     REPORT_SEC = 3600  # 1시간마다 리포트
 
-    tg(f"""🚀 바이비트 봇 v6.3c 시작 (BTC 전용 + SHORT 엄격)
+    # v6.3c: tg_plain 사용 (시작 메시지에 < > 등 HTML 예약문자 포함)
+    tg_plain(f"""🚀 바이비트 봇 v6.3c 시작 (BTC 전용 + SHORT 엄격)
 심볼: {', '.join(SYMBOLS)} (ETH 제거)
 레버리지: {LEVERAGE}배 (12→7)
 최대포지션: {MAX_POSITIONS}
@@ -1294,7 +1314,7 @@ def run_loop():
 
     # v6.3c: 명시적 루프 진입 로그 (봇 살아있음 확인용)
     print(f"[{now_kst().strftime('%H:%M:%S')}] ⚡ run_loop() 진입 — 메인 루프 시작", flush=True)
-    tg(f"⚡ v6.3c 메인 루프 진입 확인 ({now_kst().strftime('%H:%M')})")
+    tg_plain(f"⚡ v6.3c 메인 루프 진입 확인 ({now_kst().strftime('%H:%M')})")
 
     while True:
         try:
@@ -1824,14 +1844,16 @@ if __name__ == "__main__":
 
     print(f"""
 ╔══════════════════════════════════════╗
-║   바이비트 봇 v6.3b (A안 필터 강화)    ║
-║   RSI/BB 필터 + 횡보 완화             ║
-║   BTC + ETH {LEVERAGE}x / {int(ST_SIZE_PCT*100)}%              ║
+║   바이비트 봇 v6.3c (BTC 전용)         ║
+║   SHORT 엄격 + 1d 필터               ║
+║   {SYMBOLS[0]} {LEVERAGE}x / {int(ST_SIZE_PCT*100)}%              ║
 ╚══════════════════════════════════════╝
 심볼: {SYMBOLS}
 레버리지: {LEVERAGE}배
+최대포지션: {MAX_POSITIONS}
 강한추세: 비중{ST_SIZE_PCT*100:.0f}% 손절{ST_SL_PCT*100:.1f}% 트레일+{ST_TRAIL_ACT*100:.1f}%
 횡보:     비중{SW_SIZE_PCT*100:.0f}% 익절{SW_TP_PCT*100:.1f}% 손절{SW_SL_PCT*100:.1f}%
+SHORT:    비중{SHORT_SIZE_MULT*100:.0f}%, ADX≥{int(ADX_SHORT_STRONG)}, 1d 하락 필수
 월한도:   -{MONTHLY_MAX_LOSS*100:.0f}%
 거래로그: {TRADE_LOG_PATH}
 """, flush=True)
