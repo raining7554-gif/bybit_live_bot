@@ -164,15 +164,54 @@ def _manage(df_15m: pd.DataFrame):
 
 
 def _reconcile_with_exchange(api_pos):
-    """Detect that the server-side SL fired (position no longer exists)."""
-    global _pos
+    """Detect that the server-side SL fired (position no longer exists).
+
+    BUG FIX: previously called _close_current which tried to place another
+    close order on a position that was already gone, looping and spamming
+    Telegram on each iteration. Now we just record the server-side close
+    locally without re-issuing a market order.
+    """
+    global _pos, _last_loss_ts
     if not _pos:
         return
-    if api_pos is None:
-        # Position closed externally (server SL hit)
-        last_price = ex.get_price(cfg.SYMBOL)
-        eq = ex.get_balance()
-        _close_current("server_stop", last_price, eq)
+    if api_pos is not None:
+        return  # position still open
+
+    last_price = ex.get_price(cfg.SYMBOL)
+    side = _pos.get("side", "Buy")
+    entry = float(_pos.get("entry", 0))
+    size = float(_pos.get("size", 0))
+    if entry <= 0 or last_price <= 0 or size <= 0:
+        # State corrupt — just clear and move on
+        _pos.clear()
+        st.save(None)
+        return
+    if side == "Buy":
+        pnl_pct = (last_price - entry) / entry
+    else:
+        pnl_pct = (entry - last_price) / entry
+    pnl_dollar = (size * entry) * pnl_pct
+    emoji = "✅" if pnl_dollar >= 0 else "❌"
+    tg.send(
+        f"{emoji} {cfg.SYMBOL} 외부 청산 감지 (server_stop)\n"
+        f"방향: {'롱' if side == 'Buy' else '숏'}\n"
+        f"진입→마지막가: ${entry:.2f} → ${last_price:.2f}\n"
+        f"PnL: ${pnl_dollar:+.2f} ({pnl_pct*100:+.2f}%)\n"
+        f"점수: {_pos.get('score', '?')} | 레버리지: {_pos.get('leverage', 0):.1f}x"
+    )
+    st.log_trade({
+        "ts": time.time(),
+        "symbol": cfg.SYMBOL, "side": side,
+        "entry": entry, "exit": last_price,
+        "size": size, "leverage": _pos.get("leverage", 0),
+        "score": _pos.get("score", 0),
+        "pnl": round(pnl_dollar, 4), "pnl_pct": round(pnl_pct, 6),
+        "reason": "server_stop",
+    })
+    if pnl_dollar < 0:
+        _last_loss_ts = time.time()
+    _pos.clear()
+    st.save(None)
 
 
 def _restore_from_state():
@@ -235,28 +274,60 @@ def _heartbeat(equity: float):
 def main():
     global _safety, _loop_count
 
+    # ── Stage 1: env vars ─────────────────────────────────────
+    print(f"[v7 boot] stage 1: env check", flush=True)
+    print(f"  BYBIT_API_KEY: {'set' if cfg.API_KEY else 'MISSING'} ({len(cfg.API_KEY)} chars)", flush=True)
+    print(f"  BYBIT_API_SECRET: {'set' if cfg.API_SECRET else 'MISSING'} ({len(cfg.API_SECRET)} chars)", flush=True)
+    print(f"  TG_TOKEN: {'set' if cfg.TG_TOKEN else 'MISSING'} ({len(cfg.TG_TOKEN)} chars)", flush=True)
+    print(f"  TG_CHAT_ID: {'set' if cfg.TG_CHAT_ID else 'MISSING'} ({len(cfg.TG_CHAT_ID)} chars)", flush=True)
+    print(f"  SYMBOL={cfg.SYMBOL} TESTNET={cfg.TESTNET}", flush=True)
+    print(f"  MARGIN_PCT={cfg.MARGIN_PCT} CAPITAL_FRACTION={cfg.CAPITAL_FRACTION}", flush=True)
+
     if not cfg.API_KEY or not cfg.API_SECRET:
-        print("❌ BYBIT_API_KEY / BYBIT_API_SECRET required", flush=True)
+        print("❌ FATAL: BYBIT_API_KEY / BYBIT_API_SECRET required — exiting", flush=True)
         sys.exit(1)
 
-    print(f"╔════════════════════════════════════════╗")
-    print(f"║  Bybit Bot v7 — Strategy D (dynamic)   ║")
-    print(f"║  symbol={cfg.SYMBOL} margin={cfg.MARGIN_PCT*100:.0f}% testnet={cfg.TESTNET}  ║")
+    # ── Stage 2: banner ───────────────────────────────────────
+    print(f"╔════════════════════════════════════════╗", flush=True)
+    print(f"║  Bybit Bot v7 — Strategy D (dynamic)   ║", flush=True)
+    print(f"║  symbol={cfg.SYMBOL} margin={cfg.MARGIN_PCT*100:.0f}% testnet={cfg.TESTNET}", flush=True)
     print(f"╚════════════════════════════════════════╝", flush=True)
 
-    ex.init()
+    # ── Stage 3: imports + exchange init ──────────────────────
+    print(f"[v7 boot] stage 3: exchange init", flush=True)
+    try:
+        ex.init()
+    except Exception as e:
+        print(f"❌ FATAL: exchange.init failed: {e}", flush=True)
+        import traceback; traceback.print_exc()
+        sys.exit(1)
+
+    # ── Stage 4: state ────────────────────────────────────────
+    print(f"[v7 boot] stage 4: state restore", flush=True)
     _safety = safety.load()
     _restore_from_state()
 
+    # ── Stage 5: smoke-test API ──────────────────────────────
+    print(f"[v7 boot] stage 5: API smoke test", flush=True)
+    eq0 = ex.get_balance()
+    px0 = ex.get_price(cfg.SYMBOL)
+    print(f"  balance=${eq0:.2f}  price={cfg.SYMBOL}=${px0:.2f}", flush=True)
+    if eq0 <= 0 or px0 <= 0:
+        print(f"⚠️  API returned zeros — credentials/network issue likely", flush=True)
+
+    # ── Stage 6: TG smoke-test ───────────────────────────────
+    print(f"[v7 boot] stage 6: telegram send", flush=True)
     handlers = _setup_handlers()
     tg.send(
         f"🚀 v7 시작\n"
         f"심볼: {cfg.SYMBOL} | testnet: {cfg.TESTNET}\n"
+        f"잔고: ${eq0:,.2f} | 가격: ${px0:,.2f}\n"
         f"증거금: {cfg.MARGIN_PCT*100:.0f}% × 동적레버리지 (2.5/4.0/5.5x)\n"
         f"진입 임계: 점수 {cfg.ENTRY_MIN_SCORE:.0f}\n"
         f"안전: 일{safety.DAILY_LOSS_LIMIT_PCT*100:.0f}% / 주{safety.WEEKLY_LOSS_LIMIT_PCT*100:.0f}% / 월{safety.MONTHLY_LOSS_LIMIT_PCT*100:.0f}%\n"
         f"명령: /status /score /halt /resume"
     )
+    print(f"[v7 boot] startup complete — entering main loop", flush=True)
 
     while True:
         try:

@@ -12,7 +12,7 @@ _last_update_id = 0
 
 def send(msg: str, parse_mode: Optional[str] = "HTML"):
     if not cfg.TG_TOKEN or not cfg.TG_CHAT_ID:
-        print(f"[TG] {msg}", flush=True)
+        print(f"[TG SKIP — no token/chat] {msg[:120]}", flush=True)
         return
     try:
         payload = {"chat_id": cfg.TG_CHAT_ID, "text": msg}
@@ -22,14 +22,22 @@ def send(msg: str, parse_mode: Optional[str] = "HTML"):
             f"https://api.telegram.org/bot{cfg.TG_TOKEN}/sendMessage",
             json=payload, timeout=5,
         )
-        if r.status_code != 200:
-            # fallback to plain (HTML parse errors)
-            requests.post(
-                f"https://api.telegram.org/bot{cfg.TG_TOKEN}/sendMessage",
-                json={"chat_id": cfg.TG_CHAT_ID, "text": msg}, timeout=5,
-            )
+        if r.status_code == 200:
+            print(f"[TG OK] {msg[:80].replace(chr(10), ' | ')}", flush=True)
+            return
+        # Retry plain text on parse errors
+        body = r.text[:200]
+        print(f"[TG retry plain — {r.status_code}] {body}", flush=True)
+        r2 = requests.post(
+            f"https://api.telegram.org/bot{cfg.TG_TOKEN}/sendMessage",
+            json={"chat_id": cfg.TG_CHAT_ID, "text": msg}, timeout=5,
+        )
+        if r2.status_code == 200:
+            print(f"[TG OK plain] {msg[:80].replace(chr(10), ' | ')}", flush=True)
+        else:
+            print(f"[TG FAIL — {r2.status_code}] {r2.text[:200]}", flush=True)
     except Exception as e:
-        print(f"[TG err] {e}", flush=True)
+        print(f"[TG EXC] {type(e).__name__}: {e}", flush=True)
 
 
 def poll_commands(handlers: dict[str, Callable[[], None]]):
