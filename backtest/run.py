@@ -29,6 +29,7 @@ from .metrics import compute_metrics, format_report
 from .strategies.v63d import make_strategy as make_v63d
 from .strategies.strategy_a import make_strategy as make_a
 from .strategies.strategy_c import make_strategy as make_c
+from .strategies.strategy_d import make_strategy as make_d
 from .strategies.funding import analyze_funding, format_funding_report
 
 
@@ -113,8 +114,8 @@ def main():
     p.add_argument("--days", type=int, default=365)
     p.add_argument("--equity", type=float, default=1000.0)
     p.add_argument("--refresh", action="store_true")
-    p.add_argument("--strategies", default="v63d,A,C",
-                   help="comma-separated: v63d,A,C  (or 'all')")
+    p.add_argument("--strategies", default="v63d,A,C,D",
+                   help="comma-separated: v63d,A,C,D  (or 'all')")
     p.add_argument("--skip-funding", action="store_true")
     args = p.parse_args()
 
@@ -127,8 +128,11 @@ def main():
                              risk_per_trade=0.005, use_risk_sizing=True)
     cfg_v63d = BTConfig(initial_equity=args.equity, max_leverage=7.0,
                         risk_per_trade=0.02, use_risk_sizing=False)
+    cfg_dyn = BTConfig(initial_equity=args.equity, max_leverage=5.5,
+                       use_risk_sizing=False)
 
-    enabled = args.strategies.split(",") if args.strategies != "all" else ["v63d", "A", "C"]
+    default_set = ["v63d", "A", "C", "D"]
+    enabled = args.strategies.split(",") if args.strategies != "all" else default_set
     enabled = [s.strip() for s in enabled]
 
     metrics_list = []
@@ -143,6 +147,9 @@ def main():
     if "C" in enabled:
         res, m = run_one("C (15m 돌파)", make_c, df_15m, df_1h, df_4h, df_1d, cfg_risk_half)
         results["C"] = res; metrics_list.append(m)
+    if "D" in enabled:
+        res, m = run_one("D (동적 레버리지)", make_d, df_15m, df_1h, df_4h, df_1d, cfg_dyn)
+        results["D"] = res; metrics_list.append(m)
 
     table = format_report(metrics_list)
     print("\n" + "=" * 80)

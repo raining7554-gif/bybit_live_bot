@@ -13,6 +13,7 @@ from .metrics import compute_metrics, format_report
 from .strategies.v63d import make_strategy as make_v63d
 from .strategies.strategy_a import make_strategy as make_a
 from .strategies.strategy_c import make_strategy as make_c
+from .strategies.strategy_d import make_strategy as make_d
 
 
 def synth_ohlcv(n_bars: int = 4 * 24 * 30, freq_min: int = 15, seed: int = 42) -> pd.DataFrame:
@@ -45,8 +46,8 @@ def synth_ohlcv(n_bars: int = 4 * 24 * 30, freq_min: int = 15, seed: int = 42) -
 
 
 def main():
-    print("== synth data ==")
-    df_15m_raw = synth_ohlcv(n_bars=4 * 24 * 60, freq_min=15)  # 60 days of 15m
+    print("== synth data (1 year, 3 regimes) ==")
+    df_15m_raw = synth_ohlcv(n_bars=4 * 24 * 365, freq_min=15)  # 1 year of 15m
     print(f"  15m bars: {len(df_15m_raw)}  range: {df_15m_raw.index[0]} → {df_15m_raw.index[-1]}")
 
     df_15m = add_all_15m(df_15m_raw)
@@ -67,6 +68,7 @@ def main():
     cfg_v63d = BTConfig(initial_equity=1000.0, max_leverage=7.0, use_risk_sizing=False)
     cfg_risk = BTConfig(initial_equity=1000.0, max_leverage=5.0, use_risk_sizing=True, risk_per_trade=0.01)
     cfg_risk_half = BTConfig(initial_equity=1000.0, max_leverage=3.0, use_risk_sizing=True, risk_per_trade=0.005)
+    cfg_dyn = BTConfig(initial_equity=1000.0, max_leverage=5.5, use_risk_sizing=False)
 
     print("\n== running v6.3d ==")
     res_v = run_backtest(df_15m, make_v63d(), cfg=cfg_v63d, df_1h=df_1h, df_4h=df_4h, df_1d=df_1d, warmup=300)
@@ -83,7 +85,41 @@ def main():
     m_c = compute_metrics(res_c, "C")
     print(f"  trades: {m_c.get('n_trades')}  final: ${m_c['final_equity']:.2f}")
 
-    print("\n" + format_report([m_v, m_a, m_c]))
+    print("\n== running D (dynamic leverage) ==")
+    res_d = run_backtest(df_15m, make_d(), cfg=cfg_dyn, df_1h=df_1h, df_4h=df_4h, df_1d=df_1d, warmup=300)
+    m_d = compute_metrics(res_d, "D")
+    print(f"  trades: {m_d.get('n_trades')}  final: ${m_d['final_equity']:.2f}")
+
+    print("\n" + format_report([m_v, m_a, m_c, m_d]))
+
+    # D-specific: leverage distribution
+    if res_d["trades"]:
+        levs = [t.leverage for t in res_d["trades"]]
+        def _parse_score(tag):
+            # format: D_long_s53_lev2
+            for part in tag.split("_"):
+                if part.startswith("s") and part[1:].isdigit():
+                    return float(part[1:])
+            return 0.0
+        scores = [_parse_score(t.tag) for t in res_d["trades"]]
+        import numpy as np
+        print(f"\n== D leverage profile ==")
+        print(f"  avg leverage: {np.mean(levs):.2f}x | min: {min(levs):.2f}x | max: {max(levs):.2f}x")
+        print(f"  avg score:    {np.mean(scores):.1f}  | min: {min(scores):.0f} | max: {max(scores):.0f}")
+        # By bucket (v3 thresholds)
+        buckets = {"70-80": [], "80-90": [], "90+": []}
+        for t, s in zip(res_d["trades"], scores):
+            if s < 80: buckets["70-80"].append(t.pnl)
+            elif s < 90: buckets["80-90"].append(t.pnl)
+            else: buckets["90+"].append(t.pnl)
+        print(f"  bucket performance:")
+        for k, v in buckets.items():
+            if v:
+                wr = sum(1 for p in v if p > 0) / len(v) * 100
+                print(f"    score {k:>6}: n={len(v):3d} wr={wr:.0f}%  total=${sum(v):+.2f}  avg=${np.mean(v):+.2f}")
+            else:
+                print(f"    score {k:>6}: n=  0")
+
     print("\n== self-test PASS (no exceptions) ==")
 
 
