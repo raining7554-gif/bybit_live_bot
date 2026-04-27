@@ -316,16 +316,22 @@ def main():
         print(f"⚠️  API returned zeros — credentials/network issue likely", flush=True)
 
     # ── Stage 6: TG smoke-test ───────────────────────────────
-    print(f"[v7 boot] stage 6: telegram send", flush=True)
+    print(f"[v7 boot] stage 6: telegram identity + send", flush=True)
+    me = tg.get_me()
+    bot_label = (
+        f"@{me.get('username')} (id={me.get('id')})" if me else "unknown"
+    )
     handlers = _setup_handlers()
     tg.send(
         f"🚀 v7 시작\n"
+        f"봇: {bot_label}\n"
         f"심볼: {cfg.SYMBOL} | testnet: {cfg.TESTNET}\n"
         f"잔고: ${eq0:,.2f} | 가격: ${px0:,.2f}\n"
         f"증거금: {cfg.MARGIN_PCT*100:.0f}% × 동적레버리지 (2.5/4.0/5.5x)\n"
         f"진입 임계: 점수 {cfg.ENTRY_MIN_SCORE:.0f}\n"
         f"안전: 일{safety.DAILY_LOSS_LIMIT_PCT*100:.0f}% / 주{safety.WEEKLY_LOSS_LIMIT_PCT*100:.0f}% / 월{safety.MONTHLY_LOSS_LIMIT_PCT*100:.0f}%\n"
-        f"명령: /status /score /halt /resume"
+        f"명령: /status /score /halt /resume\n"
+        f"※ 명령은 위 봇({bot_label})에게만 보내야 작동"
     )
     print(f"[v7 boot] startup complete — entering main loop", flush=True)
 

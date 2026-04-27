@@ -1,4 +1,12 @@
-"""Telegram notifier with command polling. Subset of v6.3d's commands plus /score."""
+"""Telegram notifier with command polling + diagnostic logging.
+
+Diagnostic features:
+  - get_me() at startup: logs bot id/username so user can verify which
+    Telegram bot is v7 (vs other bots in the same chat).
+  - Verbose polling logs: every getUpdates response, every command
+    received, every chat_id mismatch is printed to Railway stdout.
+  - Tolerates `/cmd@bot_username` suffix (Telegram group convention).
+"""
 from __future__ import annotations
 import requests
 import time
@@ -8,6 +16,32 @@ from . import config as cfg
 
 
 _last_update_id = 0
+_bot_username: Optional[str] = None  # learned at startup
+_bot_id: Optional[int] = None
+
+
+def get_me() -> Optional[dict]:
+    """Look up our own bot's username/id once. Stored for use in command matching."""
+    global _bot_username, _bot_id
+    if not cfg.TG_TOKEN:
+        print("[TG getMe SKIP — no token]", flush=True)
+        return None
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{cfg.TG_TOKEN}/getMe", timeout=5)
+        if r.status_code != 200:
+            print(f"[TG getMe FAIL — {r.status_code}] {r.text[:200]}", flush=True)
+            return None
+        info = r.json().get("result", {})
+        _bot_id = info.get("id")
+        _bot_username = info.get("username")
+        first_name = info.get("first_name", "")
+        print(f"[TG getMe] id={_bot_id} username=@{_bot_username} name={first_name}",
+              flush=True)
+        return info
+    except Exception as e:
+        print(f"[TG getMe EXC] {e}", flush=True)
+        return None
 
 
 def send(msg: str, parse_mode: Optional[str] = "HTML"):
@@ -40,8 +74,24 @@ def send(msg: str, parse_mode: Optional[str] = "HTML"):
         print(f"[TG EXC] {type(e).__name__}: {e}", flush=True)
 
 
+def _normalize(text: str) -> str:
+    """'/status@my_bot_username 인자' → '/status'."""
+    text = text.strip()
+    if not text.startswith("/"):
+        return text
+    head = text.split()[0]            # drop trailing args
+    if "@" in head:
+        head = head.split("@", 1)[0]  # drop @bot_username
+    return head
+
+
 def poll_commands(handlers: dict[str, Callable[[], None]]):
-    """Poll for /commands. handlers maps '/cmd' -> callable taking no args."""
+    """Poll for /commands. handlers maps '/cmd' -> callable taking no args.
+
+    Diagnostic: prints every received update so we can see in Railway logs
+    whether messages reach v7 at all (vs being consumed by another bot
+    sharing the same TG_TOKEN, vs sent to the wrong chat_id).
+    """
     global _last_update_id
     if not cfg.TG_TOKEN or not cfg.TG_CHAT_ID:
         return
@@ -52,18 +102,47 @@ def poll_commands(handlers: dict[str, Callable[[], None]]):
             timeout=6,
         )
         if r.status_code != 200:
+            print(f"[TG poll FAIL — {r.status_code}] {r.text[:200]}", flush=True)
             return
-        for upd in r.json().get("result", []):
+        updates = r.json().get("result", [])
+        if not updates:
+            return
+        print(f"[TG poll] {len(updates)} update(s) received", flush=True)
+        for upd in updates:
             _last_update_id = upd["update_id"]
             msg = upd.get("message", {})
-            text = (msg.get("text") or "").strip()
-            if not text:
+            chat_id = str(msg.get("chat", {}).get("id", ""))
+            from_user = msg.get("from", {}).get("username") or msg.get("from", {}).get("first_name", "?")
+            raw_text = (msg.get("text") or "")
+            text = _normalize(raw_text)
+            print(
+                f"[TG upd #{upd['update_id']}] from=@{from_user} chat={chat_id} "
+                f"text={raw_text[:80]!r} → normalized={text!r}",
+                flush=True,
+            )
+
+            # chat_id mismatch (someone DM'd the bot from a different chat)
+            if chat_id and chat_id != str(cfg.TG_CHAT_ID):
+                print(
+                    f"[TG ignore — chat mismatch] got {chat_id!r}, "
+                    f"expected {cfg.TG_CHAT_ID!r}",
+                    flush=True,
+                )
                 continue
+
             handler = handlers.get(text)
-            if handler:
-                try:
-                    handler()
-                except Exception as e:
-                    send(f"명령 처리 오류: {e}")
+            if not handler:
+                if text.startswith("/"):
+                    print(f"[TG unknown cmd] {text}", flush=True)
+                continue
+
+            print(f"[TG cmd] dispatching {text}", flush=True)
+            try:
+                handler()
+            except Exception as e:
+                import traceback
+                print(f"[TG cmd EXC] {text}: {e}", flush=True)
+                traceback.print_exc()
+                send(f"명령 처리 오류: {e}")
     except Exception as e:
-        print(f"[TG poll err] {e}", flush=True)
+        print(f"[TG poll EXC] {e}", flush=True)
