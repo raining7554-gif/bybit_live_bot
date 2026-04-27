@@ -6,16 +6,17 @@ signals -> small leverage; clean strong-trend setups -> larger leverage.
 
 Signal strength score (0..100)
 ------------------------------
-  +30  ADX             (20 -> 0pt, 40 -> 30pt, linear, capped)
-  +25  BB width        (0.008 -> 0pt, 0.022 -> 25pt, capped)
-  +25  Volume ratio    (1.0  -> 0pt, 1.5  -> 25pt, capped)
+  +30  ADX             (18 -> 0pt, 36 -> 30pt, linear, capped)   ← v5 mid-ground
+  +25  BB width        (0.006 -> 0pt, 0.020 -> 25pt, capped)     ← v5
+  +25  Volume ratio    (0.9  -> 0pt, 1.4   -> 25pt, capped)      ← v5
   +20  MTF agreement   (1H trend same direction as 4H trend = 20, else 0)
   --
-  0..100 total  (pullback bonus dropped — anti-correlated with trend strength)
+  0..100 total
 
-Action by score (v3: enter only above empirical positive-edge threshold)
------------------------------------------------------------------------
-  score < 70           skip (lower scores empirically negative-edge)
+Action by score (v4: adds modest 60-69 tier with small probe size)
+------------------------------------------------------------------
+  score < 60           skip
+  60 <= score < 70     leverage 1.5x, risk 0.3%/trade   ← NEW v4 tier
   70 <= score < 80     leverage 2.5x, risk 0.7%/trade
   80 <= score < 90     leverage 4.0x, risk 1.0%/trade
   score >= 90          leverage 5.5x, risk 1.3%/trade  (highest conviction)
@@ -63,17 +64,17 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
         return 0.0, "none"
     direction = "long" if long_bias else "short"
 
-    # ADX component (0..30) — 20→0, 40→30
-    adx = row.adx if not pd.isna(row.adx) else 20
-    adx_pt = max(0, min(30, (adx - 20) * 1.5))
+    # ADX component (0..30) — v5: 18→0, 36→30 (mild floor lowering vs v3's 20→0)
+    adx = row.adx if not pd.isna(row.adx) else 18
+    adx_pt = max(0, min(30, (adx - 18) / 18 * 30))
 
-    # BB width component (0..25) — 0.008→0, 0.022→25
+    # BB width component (0..25) — v5: 0.006→0, 0.020→25 (mild)
     bbw = row.bb_width if not pd.isna(row.bb_width) else 0.01
-    bbw_pt = max(0, min(25, (bbw - 0.008) / 0.014 * 25))
+    bbw_pt = max(0, min(25, (bbw - 0.006) / 0.014 * 25))
 
-    # Volume component (0..25) — 1.0→0, 1.5→25
+    # Volume component (0..25) — v5: 0.9→0, 1.4→25
     vr = row.vol_ratio if not pd.isna(row.vol_ratio) else 1.0
-    vol_pt = max(0, min(25, (vr - 1.0) / 0.5 * 25))
+    vol_pt = max(0, min(25, (vr - 0.9) / 0.5 * 25))
 
     # MTF agreement (0..20)
     h1_long = row_h1.close > row_h1.ema50
@@ -85,8 +86,9 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
 
 
 def _leverage_and_risk(score: float) -> tuple[float, float]:
-    """Map score to (leverage, risk_per_trade)."""
-    if score < 70: return 0.0, 0.0
+    """Map score to (leverage, risk_per_trade). v4: adds 60-69 modest tier."""
+    if score < 60: return 0.0, 0.0
+    if score < 70: return 1.5, 0.003   # NEW v4 tier — small probe
     if score < 80: return 2.5, 0.007
     if score < 90: return 4.0, 0.010
     return 5.5, 0.013
@@ -158,7 +160,7 @@ def make_strategy():
 
         # ----- compute signal strength -----
         score, direction = _signal_strength(row, row_h1, row_h4)
-        if direction == "none" or score < 70:
+        if direction == "none" or score < 60:    # v4: lowered entry threshold
             return None
 
         # ----- 1H RSI cross trigger (within last 4 1H bars) -----
