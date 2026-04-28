@@ -13,10 +13,11 @@ Signal strength score (0..100)
   --
   0..100 total
 
-Action by score (v4: adds modest 60-69 tier with small probe size)
-------------------------------------------------------------------
-  score < 60           skip
-  60 <= score < 70     leverage 1.5x, risk 0.3%/trade   ← NEW v4 tier
+Action by score (v6: 4H bias loosened, MTF non-binary, 55-59 micro-probe)
+-----------------------------------------------------------------------
+  score < 55           skip
+  55 <= score < 60     leverage 1.0x, risk 0.2%/trade   ← NEW v6 micro-probe
+  60 <= score < 70     leverage 1.5x, risk 0.3%/trade
   70 <= score < 80     leverage 2.5x, risk 0.7%/trade
   80 <= score < 90     leverage 4.0x, risk 1.0%/trade
   score >= 90          leverage 5.5x, risk 1.3%/trade  (highest conviction)
@@ -51,24 +52,30 @@ TP_SCALE_R = 2.0
 
 
 def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
-    """Returns (score 0..100, direction 'long'|'short'|'none')."""
+    """Returns (score 0..100, direction 'long'|'short'|'none').
+
+    v6 changes vs v5:
+      - 4H bias loosened: close vs EMA200 only (drops EMA50 > EMA200 requirement)
+      - MTF non-binary: 20 (strict agree) / 12 (1H neutral) / 0 (oppose)
+      - Entry threshold can be lowered to 55 in tier table
+    """
     if row_h4 is None or pd.isna(row_h4.get("ema200", np.nan)):
         return 0.0, "none"
     if row_h1 is None or pd.isna(row_h1.get("rsi", np.nan)):
         return 0.0, "none"
 
-    # 4H trend direction
-    long_bias = (row_h4.close > row_h4.ema200) and (row_h4.ema50 > row_h4.ema200)
-    short_bias = (row_h4.close < row_h4.ema200) and (row_h4.ema50 < row_h4.ema200)
+    # 4H trend direction — v6 looser (drop EMA50 > EMA200)
+    long_bias = row_h4.close > row_h4.ema200
+    short_bias = row_h4.close < row_h4.ema200
     if not (long_bias or short_bias):
         return 0.0, "none"
     direction = "long" if long_bias else "short"
 
-    # ADX component (0..30) — v5: 18→0, 36→30 (mild floor lowering vs v3's 20→0)
+    # ADX component (0..30) — v5: 18→0, 36→30
     adx = row.adx if not pd.isna(row.adx) else 18
     adx_pt = max(0, min(30, (adx - 18) / 18 * 30))
 
-    # BB width component (0..25) — v5: 0.006→0, 0.020→25 (mild)
+    # BB width component (0..25) — v5: 0.006→0, 0.020→25
     bbw = row.bb_width if not pd.isna(row.bb_width) else 0.01
     bbw_pt = max(0, min(25, (bbw - 0.006) / 0.014 * 25))
 
@@ -76,19 +83,32 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
     vr = row.vol_ratio if not pd.isna(row.vol_ratio) else 1.0
     vol_pt = max(0, min(25, (vr - 0.9) / 0.5 * 25))
 
-    # MTF agreement (0..20)
-    h1_long = row_h1.close > row_h1.ema50
-    h1_short = row_h1.close < row_h1.ema50
-    mtf_pt = 20 if (long_bias and h1_long) or (short_bias and h1_short) else 0
+    # MTF agreement (0..20) — v6 non-binary: 20 / 12 / 0
+    if not pd.isna(row_h1.get("ema50", np.nan)) and row_h1.ema50 > 0:
+        h1_dist = (row_h1.close - row_h1.ema50) / row_h1.ema50
+    else:
+        h1_dist = 0.0
+    h1_long = h1_dist > 0.001
+    h1_short = h1_dist < -0.001
+    h1_neutral = abs(h1_dist) <= 0.001
+    if (long_bias and h1_long) or (short_bias and h1_short):
+        mtf_pt = 20
+    elif h1_neutral:
+        mtf_pt = 12
+    else:
+        mtf_pt = 0
 
     score = adx_pt + bbw_pt + vol_pt + mtf_pt
     return score, direction
 
 
 def _leverage_and_risk(score: float) -> tuple[float, float]:
-    """Map score to (leverage, risk_per_trade). v4: adds 60-69 modest tier."""
-    if score < 60: return 0.0, 0.0
-    if score < 70: return 1.5, 0.003   # NEW v4 tier — small probe
+    """Map score to (leverage, risk_per_trade).
+    v6: adds 55-59 micro-probe tier on top of v5/v4 ladder.
+    """
+    if score < 55: return 0.0, 0.0
+    if score < 60: return 1.0, 0.002   # NEW v6 micro-probe — tiny size when MTF is neutral
+    if score < 70: return 1.5, 0.003
     if score < 80: return 2.5, 0.007
     if score < 90: return 4.0, 0.010
     return 5.5, 0.013
@@ -160,7 +180,7 @@ def make_strategy():
 
         # ----- compute signal strength -----
         score, direction = _signal_strength(row, row_h1, row_h4)
-        if direction == "none" or score < 60:    # v4: lowered entry threshold
+        if direction == "none" or score < 55:    # v6: lowered to 55 (micro-probe)
             return None
 
         # ----- 1H RSI cross trigger (within last 4 1H bars) -----

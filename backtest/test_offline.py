@@ -106,10 +106,11 @@ def main():
         print(f"\n== D leverage profile ==")
         print(f"  avg leverage: {np.mean(levs):.2f}x | min: {min(levs):.2f}x | max: {max(levs):.2f}x")
         print(f"  avg score:    {np.mean(scores):.1f}  | min: {min(scores):.0f} | max: {max(scores):.0f}")
-        # By bucket (v4 thresholds)
-        buckets = {"60-70": [], "70-80": [], "80-90": [], "90+": []}
+        # By bucket (v6 thresholds)
+        buckets = {"55-60": [], "60-70": [], "70-80": [], "80-90": [], "90+": []}
         for t, s in zip(res_d["trades"], scores):
-            if s < 70: buckets["60-70"].append(t.pnl)
+            if s < 60: buckets["55-60"].append(t.pnl)
+            elif s < 70: buckets["60-70"].append(t.pnl)
             elif s < 80: buckets["70-80"].append(t.pnl)
             elif s < 90: buckets["80-90"].append(t.pnl)
             else: buckets["90+"].append(t.pnl)
