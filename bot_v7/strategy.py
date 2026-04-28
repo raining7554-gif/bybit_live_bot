@@ -16,11 +16,12 @@ from backtest.strategies.strategy_d import (
 
 
 def _leverage_for_score(score: float) -> float:
-    """v4 tiered map. Probe tier (60-69) gets small leverage.
-    Order matters: probe < base < mid < high thresholds.
+    """v6 tiered map: micro (55-59) / probe (60-69) / base / mid / high.
+    Order matters: thresholds are strict less-than.
     """
-    if score < cfg.ENTRY_MIN_SCORE:   return 0.0   # < 60 → skip
-    if score < cfg.SCORE_TIER_PROBE:  return cfg.LEV_TIER_PROBE  # 60..69
+    if score < cfg.ENTRY_MIN_SCORE:   return 0.0           # < 55 → skip
+    if score < cfg.SCORE_TIER_PROBE:  return cfg.LEV_TIER_MICRO  # 55..59
+    if score < cfg.SCORE_TIER_LOW:    return cfg.LEV_TIER_PROBE  # 60..69
     if score < cfg.SCORE_TIER_1:      return cfg.LEV_TIER_BASE   # 70..79
     if score < cfg.SCORE_TIER_2:      return cfg.LEV_TIER_MID    # 80..89
     return cfg.LEV_TIER_HIGH                                     # 90+
