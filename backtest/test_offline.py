@@ -14,6 +14,7 @@ from .strategies.v63d import make_strategy as make_v63d
 from .strategies.strategy_a import make_strategy as make_a
 from .strategies.strategy_c import make_strategy as make_c
 from .strategies.strategy_d import make_strategy as make_d
+from .strategies.strategy_mr import make_strategy as make_mr
 
 
 def synth_ohlcv(n_bars: int = 4 * 24 * 30, freq_min: int = 15, seed: int = 42) -> pd.DataFrame:
@@ -90,7 +91,15 @@ def main():
     m_d = compute_metrics(res_d, "D")
     print(f"  trades: {m_d.get('n_trades')}  final: ${m_d['final_equity']:.2f}")
 
-    print("\n" + format_report([m_v, m_a, m_c, m_d]))
+    print("\n== running MR (mean reversion, chop regime) ==")
+    cfg_mr = BTConfig(initial_equity=1000.0, max_leverage=2.0,
+                      use_risk_sizing=True, risk_per_trade=0.005)
+    res_mr = run_backtest(df_15m, make_mr(), cfg=cfg_mr,
+                          df_1h=df_1h, df_4h=df_4h, df_1d=df_1d, warmup=300)
+    m_mr = compute_metrics(res_mr, "MR")
+    print(f"  trades: {m_mr.get('n_trades')}  final: ${m_mr['final_equity']:.2f}")
+
+    print("\n" + format_report([m_v, m_a, m_c, m_d, m_mr]))
 
     # D-specific: leverage distribution
     if res_d["trades"]:
