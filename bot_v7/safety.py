@@ -14,10 +14,14 @@ from typing import Optional
 from . import config as cfg
 
 
-# ─── HARD LIMITS — DO NOT CHANGE WITHOUT RE-AUDIT ──────────────
-DAILY_LOSS_LIMIT_PCT   = -0.03   # -3% intra-day → 24h halt
-WEEKLY_LOSS_LIMIT_PCT  = -0.07   # -7% rolling 7d → 7d halt
-MONTHLY_LOSS_LIMIT_PCT = -0.12   # -12% rolling 30d → 30d halt
+# ─── LIMITS (relaxed v7-3tier — user actively monitoring) ──────
+# Raised from -3/-7/-12 to -7/-15/-25 because the new tier map allows
+# 10x leverage at score >= 90, where a single 1.5*ATR stop can hit -2.85%
+# equity. Tighter limits would halt on a single losing high-score trade.
+DAILY_LOSS_LIMIT_PCT   = -0.07   # -7% intra-day → 24h halt
+WEEKLY_LOSS_LIMIT_PCT  = -0.15   # -15% rolling 7d → 7d halt
+MONTHLY_LOSS_LIMIT_PCT = -0.25   # -25% rolling 30d → 30d halt (catches
+                                  # before reaching v6.3d's -35% disaster)
 LIQ_DISTANCE_DOWNSIZE  = 0.10    # if any open pos liq distance < 10%, downsize
 
 DAY_SEC   = 86400

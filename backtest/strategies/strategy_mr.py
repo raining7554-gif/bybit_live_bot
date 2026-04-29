@@ -41,7 +41,7 @@ BB_POS_LOW = 0.10
 BB_POS_HIGH = 0.90
 COOLDOWN_BARS_LOSS = 4
 COOLDOWN_BARS_WIN = 2
-LEV = 2.0
+LEV = 5.0    # raised from 2.0 to match v7-3tier policy
 RISK = 0.005
 
 
