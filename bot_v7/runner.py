@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 
@@ -19,11 +19,14 @@ _pos: dict = {}            # in-memory active position dict (or empty)
 _last_loss_ts: float = 0.0  # cooldown after a stop
 _safety = None             # SafetyState
 _loop_count = 0
-_last_report_ts: float = 0.0  # last hourly Telegram report timestamp
+_last_report_kst_hour: int = -1  # KST hour we last sent the hourly report for
+
+
+KST = timezone(timedelta(hours=9))
 
 
 def _now_str() -> str:
-    return datetime.now().strftime("%H:%M:%S")
+    return datetime.now(KST).strftime("%H:%M:%S KST")
 
 
 def _build_status_text(equity: float) -> str:
@@ -306,15 +309,18 @@ def _heartbeat(equity: float):
 
 
 def _maybe_hourly_report(equity: float, df15, df1h, df4h):
-    """Send a status report every hour to Telegram."""
-    global _last_report_ts
-    now = time.time()
-    if _last_report_ts == 0:
-        _last_report_ts = now           # don't fire immediately at startup
-        return
-    if now - _last_report_ts < 3600:
-        return
-    _last_report_ts = now
+    """Send a status report on every KST hour mark (XX:00 ~ XX:05 window).
+
+    Fires at most once per KST hour. Window is 5 minutes wide so a 30s
+    main loop reliably catches it without missing on slow ticks.
+    """
+    global _last_report_kst_hour
+    now_kst = datetime.now(KST)
+    if now_kst.minute >= 5:
+        return                          # outside the top-of-hour window
+    if now_kst.hour == _last_report_kst_hour:
+        return                          # already reported this hour
+    _last_report_kst_hour = now_kst.hour
 
     from backtest.strategies.strategy_d import _signal_strength
     from backtest.strategies.strategy_mr import _check_signal as mr_check
@@ -351,7 +357,7 @@ def _maybe_hourly_report(equity: float, df15, df1h, df4h):
         )
 
     msg = (
-        f"⏰ 시간 리포트 ({_now_str()})\n"
+        f"⏰ {now_kst.strftime('%m/%d %H:00 KST')} 리포트\n"
         f"잔고: ${equity:,.2f}\n"
         f"가격: ${px:,.2f}\n"
         f"{day_dd}\n"
@@ -414,20 +420,23 @@ def main():
     )
     handlers = _setup_handlers()
     tg.send(
-        f"🚀 v7 시작 (D + MR + 시간리포트)\n"
+        f"🚀 v7 시작 (3tier 공격형)\n"
         f"봇: {bot_label}\n"
         f"심볼: {cfg.SYMBOL} | testnet: {cfg.TESTNET}\n"
         f"잔고: ${eq0:,.2f} | 가격: ${px0:,.2f}\n"
         f"━ D 전략 (추세) ━\n"
-        f"증거금 {cfg.MARGIN_PCT*100:.0f}% × 동적레버리지 1.0/1.5/2.5/4.0/5.5x\n"
-        f"진입 임계: 점수 {cfg.ENTRY_MIN_SCORE:.0f}\n"
-        f"━ MR 전략 (평균회귀, NEW) ━\n"
+        f"증거금 {cfg.MARGIN_PCT*100:.0f}% × 레버리지 5/7/10x\n"
+        f"  점수 70-79 → 5x\n"
+        f"  점수 80-89 → 7x\n"
+        f"  점수 90+ → 10x\n"
+        f"━ MR 전략 (평균회귀) ━\n"
         f"BB 극단 + 횡보 + RSI 과매수/과매도\n"
-        f"고정 lev 2.0x, TP=BB 중간선\n"
-        f"━ 안전 ━\n"
+        f"고정 lev 5.0x, TP=BB 중간선\n"
+        f"━ 안전 (사용자 모니터링 가정) ━\n"
         f"일{safety.DAILY_LOSS_LIMIT_PCT*100:.0f}% / 주{safety.WEEKLY_LOSS_LIMIT_PCT*100:.0f}% / 월{safety.MONTHLY_LOSS_LIMIT_PCT*100:.0f}% 자동정지\n"
+        f"서버사이드 -2% SL 모든 진입에 부착\n"
         f"명령: /status /score /halt /resume\n"
-        f"⏰ 1시간마다 자동 리포트 옵니다"
+        f"⏰ KST 정각마다 자동 리포트"
     )
     print(f"[v7 boot] startup complete — entering main loop", flush=True)
 

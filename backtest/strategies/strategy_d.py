@@ -103,15 +103,11 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
 
 
 def _leverage_and_risk(score: float) -> tuple[float, float]:
-    """Map score to (leverage, risk_per_trade).
-    v6: adds 55-59 micro-probe tier on top of v5/v4 ladder.
-    """
-    if score < 55: return 0.0, 0.0
-    if score < 60: return 1.0, 0.002   # NEW v6 micro-probe — tiny size when MTF is neutral
-    if score < 70: return 1.5, 0.003
-    if score < 80: return 2.5, 0.007
-    if score < 90: return 4.0, 0.010
-    return 5.5, 0.013
+    """v7-3tier: 5x / 7x / 10x. Aligns with bot_v7 live config."""
+    if score < 70: return 0.0, 0.0
+    if score < 80: return 5.0,  0.014    # 5x at -1.4% per stop
+    if score < 90: return 7.0,  0.020    # 7x at -2.0% per stop
+    return 10.0, 0.029                    # 10x at -2.85% per stop
 
 
 def _rsi_crossed_50(rsi_series: pd.Series, lookback: int = 4) -> str:
@@ -180,7 +176,7 @@ def make_strategy():
 
         # ----- compute signal strength -----
         score, direction = _signal_strength(row, row_h1, row_h4)
-        if direction == "none" or score < 55:    # v6: lowered to 55 (micro-probe)
+        if direction == "none" or score < 70:    # v7-3tier: only enter on strong signals
             return None
 
         # ----- 1H RSI cross trigger (within last 4 1H bars) -----
