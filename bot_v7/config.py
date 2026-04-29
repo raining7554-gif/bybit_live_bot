@@ -24,10 +24,12 @@ MARGIN_PCT       = float(os.environ.get("MARGIN_PCT", "0.50"))
 # Max equity actually used by the bot (rest sits idle as buffer).
 CAPITAL_FRACTION = float(os.environ.get("CAPITAL_FRACTION", "1.00"))
 
-# ─── Strategy D v7-3tier (user-requested aggressive scaling) ──
-ENTRY_MIN_SCORE  = 70.0   # back to v3 — only enter on strong signals
+# ─── Strategy D v7-r1 (relaxed: 4 tiers + lower threshold + RSI direction) ──
+ENTRY_MIN_SCORE  = 60.0   # v7-r1: 70 → 60 (probe tier added)
+SCORE_TIER_PROBE = 70.0   # 60..69 -> probe (3x)
 SCORE_TIER_1     = 80.0   # 70..79 -> base (5x)
 SCORE_TIER_2     = 90.0   # 80..89 -> mid (7x); >=90 -> high (10x)
+LEV_TIER_PROBE   = 3.0    # 60..69 (NEW)
 LEV_TIER_BASE    = 5.0    # 70..79
 LEV_TIER_MID     = 7.0    # 80..89
 LEV_TIER_HIGH    = 10.0   # 90+

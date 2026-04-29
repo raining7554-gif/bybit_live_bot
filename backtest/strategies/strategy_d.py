@@ -103,11 +103,12 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
 
 
 def _leverage_and_risk(score: float) -> tuple[float, float]:
-    """v7-3tier: 5x / 7x / 10x. Aligns with bot_v7 live config."""
-    if score < 70: return 0.0, 0.0
-    if score < 80: return 5.0,  0.014    # 5x at -1.4% per stop
-    if score < 90: return 7.0,  0.020    # 7x at -2.0% per stop
-    return 10.0, 0.029                    # 10x at -2.85% per stop
+    """v7-r1 4-tier: 3x / 5x / 7x / 10x. Lower threshold to 60."""
+    if score < 60: return 0.0, 0.0
+    if score < 70: return 3.0,  0.009    # NEW probe — small step before 5x
+    if score < 80: return 5.0,  0.014
+    if score < 90: return 7.0,  0.020
+    return 10.0, 0.029
 
 
 def _rsi_crossed_50(rsi_series: pd.Series, lookback: int = 4) -> str:
@@ -121,6 +122,23 @@ def _rsi_crossed_50(rsi_series: pd.Series, lookback: int = 4) -> str:
         if win[i] > 50 and win[i + 1] <= 50:
             return "down"
     return "none"
+
+
+def _rsi_directional(rsi_series: pd.Series, side: str, lookback: int = 4) -> bool:
+    """v7-r1: RSI in trend-supporting zone OR recent cross of 50.
+    Far more permissive than strict cross (which is rare in chop).
+    """
+    if len(rsi_series) < 2:
+        return False
+    cur = rsi_series.iloc[-1]
+    if pd.isna(cur):
+        return False
+    if side == "long" and cur > 50:
+        return True
+    if side == "short" and cur < 50:
+        return True
+    cross = _rsi_crossed_50(rsi_series, lookback)
+    return (side == "long" and cross == "up") or (side == "short" and cross == "down")
 
 
 def make_strategy():
@@ -176,20 +194,15 @@ def make_strategy():
 
         # ----- compute signal strength -----
         score, direction = _signal_strength(row, row_h1, row_h4)
-        if direction == "none" or score < 70:    # v7-3tier: only enter on strong signals
+        if direction == "none" or score < 60:    # v7-r1: lowered to 60 (probe tier)
             return None
 
-        # ----- 1H RSI cross trigger (within last 4 1H bars) -----
-        # h1 is aligned to 15m index; take last 16 (4*4) 15m rows of h1
+        # ----- 1H RSI directional check (was: strict cross) -----
         h1_window = h1.iloc[max(0, i - 16):i + 1]
         if len(h1_window) < 16:
             return None
-        # de-duplicate (h1 ffill replicates same value across 4 15m rows)
         rsi_unique = h1_window["rsi"].drop_duplicates().tail(5)
-        cross = _rsi_crossed_50(rsi_unique, lookback=4)
-        if direction == "long" and cross != "up":
-            return None
-        if direction == "short" and cross != "down":
+        if not _rsi_directional(rsi_unique, direction, lookback=4):
             return None
 
         # ----- candle confirmation -----

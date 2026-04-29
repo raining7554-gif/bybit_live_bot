@@ -10,7 +10,7 @@ import pandas as pd
 from . import config as cfg
 from backtest.indicators import add_all_15m, add_basic_1h, add_basic_4h
 from backtest.strategies.strategy_d import (
-    _signal_strength, _rsi_crossed_50,
+    _signal_strength, _rsi_crossed_50, _rsi_directional,
     ATR_STOP_MULT, ATR_TRAIL_MULT,
 )
 from backtest.strategies.strategy_mr import _check_signal as _mr_check_signal
@@ -20,8 +20,9 @@ from backtest.strategies.strategy_mr import (
 
 
 def _leverage_for_score(score: float) -> float:
-    """v7-3tier map: 5x / 7x / 10x. Sub-70 scores skip entirely."""
-    if score < cfg.ENTRY_MIN_SCORE:  return 0.0           # < 70 → skip
+    """v7-r1 4-tier map: 3x (probe) / 5x / 7x / 10x. Threshold 60."""
+    if score < cfg.ENTRY_MIN_SCORE:  return 0.0           # < 60 → skip
+    if score < cfg.SCORE_TIER_PROBE: return cfg.LEV_TIER_PROBE  # 60..69
     if score < cfg.SCORE_TIER_1:     return cfg.LEV_TIER_BASE   # 70..79
     if score < cfg.SCORE_TIER_2:     return cfg.LEV_TIER_MID    # 80..89
     return cfg.LEV_TIER_HIGH                                    # 90+
@@ -52,12 +53,11 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
     if direction == "none" or score < cfg.ENTRY_MIN_SCORE:
         return None
 
-    # 1H RSI cross 50 within last 4 1H bars
+    # 1H RSI directional check (v7-r1: relaxed from strict cross)
+    # Long: RSI > 50 (sustained bull) OR cross up in last 4 bars
+    # Short: RSI < 50 OR cross down
     rsi_recent = df_1h["rsi"].tail(5)
-    cross = _rsi_crossed_50(rsi_recent, lookback=4)
-    if direction == "long" and cross != "up":
-        return None
-    if direction == "short" and cross != "down":
+    if not _rsi_directional(rsi_recent, direction, lookback=4):
         return None
 
     # 15m candle confirmation
