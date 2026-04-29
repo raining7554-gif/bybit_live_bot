@@ -19,6 +19,7 @@ _pos: dict = {}            # in-memory active position dict (or empty)
 _last_loss_ts: float = 0.0  # cooldown after a stop
 _safety = None             # SafetyState
 _loop_count = 0
+_last_report_ts: float = 0.0  # last hourly Telegram report timestamp
 
 
 def _now_str() -> str:
@@ -49,16 +50,26 @@ def _build_score_text(df_15m, df_1h, df_4h) -> str:
     if len(df_15m) < 60 or len(df_1h) < 60 or len(df_4h) < 60:
         return "데이터 부족"
     from backtest.strategies.strategy_d import _signal_strength
-    score, direction = _signal_strength(
-        df_15m.iloc[-1], df_1h.iloc[-1], df_4h.iloc[-1])
+    from backtest.strategies.strategy_mr import _check_signal as mr_check
+    row, rh1, rh4 = df_15m.iloc[-1], df_1h.iloc[-1], df_4h.iloc[-1]
+    score, direction = _signal_strength(row, rh1, rh4)
     lev = strat._leverage_for_score(score)
+    mr_side, mr_reason = mr_check(row, rh4)
     return (
         f"📈 시그널 점수\n"
+        f"━ D (추세) ━\n"
         f"방향: {direction}\n"
         f"점수: {score:.1f} / 100\n"
         f"진입 임계: {cfg.ENTRY_MIN_SCORE:.0f}\n"
         f"매핑 레버리지: {lev:.1f}x"
-        + ("" if lev > 0 else " (진입 X)")
+        + ("" if lev > 0 else " (진입 X)") + "\n"
+        f"━ MR (평균회귀) ━\n"
+        f"신호: {mr_side}\n"
+        f"이유: {mr_reason}\n"
+        f"━ 시장 데이터 ━\n"
+        f"ADX: {row.adx:.1f} | BB폭: {row.bb_width*100:.2f}% | "
+        f"BB위치: {row.bb_pos*100:.0f}%\n"
+        f"RSI: {row.rsi:.0f} | 거래량: {row.vol_ratio:.2f}x"
     )
 
 
@@ -100,58 +111,81 @@ def _close_current(reason: str, fill_price: float, equity_before: float):
 
 
 def _try_open(equity: float, signal: dict):
-    """Open new position from a signal dict."""
+    """Open new position from a signal dict (D or MR)."""
     global _pos
     side = signal["side"]
     lev = signal["leverage"]
+    is_mr = bool(signal.get("mr"))
     entry_price = ex.get_price(cfg.SYMBOL)
     if entry_price <= 0:
         return
 
-    # 1) Set leverage on Bybit
     if not ex.set_leverage(cfg.SYMBOL, lev):
         tg.send(f"⚠️ 레버리지 설정 실패 → 진입 보류")
         return
 
-    # 2) Compute qty + disaster SL
     qty = strat.calc_qty(equity, lev, entry_price, cfg.SYMBOL)
     if qty <= 0:
         return
     disaster_sl = entry_price * (1 - cfg.DISASTER_SL_PCT) if side == "Buy" \
                   else entry_price * (1 + cfg.DISASTER_SL_PCT)
 
-    # 3) Place market order
     ok, oid = ex.place_market_order(cfg.SYMBOL, side, qty, disaster_sl)
     if not ok:
         tg.send(f"⚠️ {cfg.SYMBOL} 진입 실패: {oid[:200]}")
         return
 
-    # 4) Tighten SL to strategy stop if it's tighter than disaster SL
     strat_stop = signal["stop_price"]
     final_stop = max(strat_stop, disaster_sl) if side == "Buy" else min(strat_stop, disaster_sl)
     ex.update_stop_loss(cfg.SYMBOL, side, final_stop)
 
-    # 5) Build local pos
+    tp_price = signal.get("tp_price")  # MR uses fixed TP at BB midline; D = None
+
     _pos.update({
         "side": side, "entry": entry_price, "size": qty,
         "leverage": lev, "score": signal["score"],
         "init_stop": signal["stop_price"], "current_stop": final_stop,
         "be_done": False, "atr_15m": signal["atr_15m"],
+        "tp_price": tp_price,
+        "strategy": "MR" if is_mr else "D",
         "opened_ts": time.time(),
     })
     st.save(_pos)
-    tg.send(
-        f"📈 {cfg.SYMBOL} 진입 ({'롱' if side=='Buy' else '숏'})\n"
-        f"점수: {signal['score']:.1f} → 레버리지 {lev:.1f}x\n"
-        f"가격: ${entry_price:.2f} | qty: {qty}\n"
-        f"손절: ${final_stop:.2f} ({(final_stop/entry_price-1)*100:+.2f}%)\n"
-        f"잔고: ${equity:,.2f} | 증거금: ${equity*cfg.MARGIN_PCT*cfg.CAPITAL_FRACTION:,.2f}"
-    )
+
+    if is_mr:
+        tg.send(
+            f"〰️ {cfg.SYMBOL} MR 진입 ({'롱' if side=='Buy' else '숏'})\n"
+            f"전략: 평균회귀 (BB 극단 + 횡보)\n"
+            f"가격: ${entry_price:.2f} | qty: {qty} | lev {lev:.1f}x\n"
+            f"손절: ${final_stop:.2f} ({(final_stop/entry_price-1)*100:+.2f}%)\n"
+            f"익절: ${tp_price:.2f} (BB 중앙선)\n"
+            f"잔고: ${equity:,.2f}"
+        )
+    else:
+        tg.send(
+            f"📈 {cfg.SYMBOL} D 진입 ({'롱' if side=='Buy' else '숏'})\n"
+            f"점수: {signal['score']:.1f} → 레버리지 {lev:.1f}x\n"
+            f"가격: ${entry_price:.2f} | qty: {qty}\n"
+            f"손절: ${final_stop:.2f} ({(final_stop/entry_price-1)*100:+.2f}%)\n"
+            f"잔고: ${equity:,.2f} | 증거금: ${equity*cfg.MARGIN_PCT*cfg.CAPITAL_FRACTION:,.2f}"
+        )
 
 
 def _manage(df_15m: pd.DataFrame):
-    """Update trailing stop on existing position."""
+    """Update trailing stop on existing position.
+    MR positions do NOT trail — they exit at fixed BB-mid TP or initial stop.
+    """
     if not _pos:
+        return
+    if _pos.get("strategy") == "MR":
+        # MR: hold static stop + TP, no trailing (mean reversion target)
+        # Check if price has reached TP (engine-side TP not in v7 — manual)
+        tp = _pos.get("tp_price")
+        if tp:
+            cur_px = float(df_15m["close"].iloc[-1])
+            if (_pos["side"] == "Buy" and cur_px >= tp) or \
+               (_pos["side"] == "Sell" and cur_px <= tp):
+                _close_current("mr_tp", cur_px, ex.get_balance())
         return
     last_high = df_15m["high"].iloc[-1]
     last_low = df_15m["low"].iloc[-1]
@@ -271,6 +305,63 @@ def _heartbeat(equity: float):
           flush=True)
 
 
+def _maybe_hourly_report(equity: float, df15, df1h, df4h):
+    """Send a status report every hour to Telegram."""
+    global _last_report_ts
+    now = time.time()
+    if _last_report_ts == 0:
+        _last_report_ts = now           # don't fire immediately at startup
+        return
+    if now - _last_report_ts < 3600:
+        return
+    _last_report_ts = now
+
+    from backtest.strategies.strategy_d import _signal_strength
+    from backtest.strategies.strategy_mr import _check_signal as mr_check
+    try:
+        score, direction = _signal_strength(df15.iloc[-1], df1h.iloc[-1], df4h.iloc[-1])
+        lev = strat._leverage_for_score(score)
+    except Exception:
+        score, direction, lev = 0.0, "n/a", 0.0
+    try:
+        mr_side, mr_reason = mr_check(df15.iloc[-1], df4h.iloc[-1])
+    except Exception:
+        mr_side, mr_reason = "none", "err"
+
+    px = float(df15.iloc[-1].close)
+
+    # Daily PnL anchor (from safety state)
+    day_dd = ""
+    if _safety and _safety.day_anchor_equity > 0:
+        d = (equity - _safety.day_anchor_equity) / _safety.day_anchor_equity
+        day_dd = f"오늘 PnL: {d*100:+.2f}% (한도 -3%)"
+
+    pos_line = "포지션: 없음"
+    if _pos:
+        side_kr = "롱" if _pos.get("side") == "Buy" else "숏"
+        entry = _pos.get("entry", 0)
+        cur_pnl = (px - entry) / entry if _pos.get("side") == "Buy" else (entry - px) / entry
+        notional = _pos.get("size", 0) * entry
+        pnl_dollar = notional * cur_pnl
+        pos_line = (
+            f"포지션: {_pos.get('strategy','?')} {side_kr} "
+            f"entry=${entry:.2f} now=${px:.2f}\n"
+            f"  PnL: ${pnl_dollar:+.2f} ({cur_pnl*100:+.2f}%) "
+            f"lev={_pos.get('leverage',0):.1f}x"
+        )
+
+    msg = (
+        f"⏰ 시간 리포트 ({_now_str()})\n"
+        f"잔고: ${equity:,.2f}\n"
+        f"가격: ${px:,.2f}\n"
+        f"{day_dd}\n"
+        f"D 점수: {score:.1f} (방향: {direction}, 매핑 lev: {lev:.1f}x)\n"
+        f"MR 신호: {mr_side} ({mr_reason})\n"
+        f"{pos_line}"
+    )
+    tg.send(msg)
+
+
 def main():
     global _safety, _loop_count
 
@@ -323,15 +414,20 @@ def main():
     )
     handlers = _setup_handlers()
     tg.send(
-        f"🚀 v7 시작\n"
+        f"🚀 v7 시작 (D + MR + 시간리포트)\n"
         f"봇: {bot_label}\n"
         f"심볼: {cfg.SYMBOL} | testnet: {cfg.TESTNET}\n"
         f"잔고: ${eq0:,.2f} | 가격: ${px0:,.2f}\n"
-        f"증거금: {cfg.MARGIN_PCT*100:.0f}% × 동적레버리지 (2.5/4.0/5.5x)\n"
+        f"━ D 전략 (추세) ━\n"
+        f"증거금 {cfg.MARGIN_PCT*100:.0f}% × 동적레버리지 1.0/1.5/2.5/4.0/5.5x\n"
         f"진입 임계: 점수 {cfg.ENTRY_MIN_SCORE:.0f}\n"
-        f"안전: 일{safety.DAILY_LOSS_LIMIT_PCT*100:.0f}% / 주{safety.WEEKLY_LOSS_LIMIT_PCT*100:.0f}% / 월{safety.MONTHLY_LOSS_LIMIT_PCT*100:.0f}%\n"
+        f"━ MR 전략 (평균회귀, NEW) ━\n"
+        f"BB 극단 + 횡보 + RSI 과매수/과매도\n"
+        f"고정 lev 2.0x, TP=BB 중간선\n"
+        f"━ 안전 ━\n"
+        f"일{safety.DAILY_LOSS_LIMIT_PCT*100:.0f}% / 주{safety.WEEKLY_LOSS_LIMIT_PCT*100:.0f}% / 월{safety.MONTHLY_LOSS_LIMIT_PCT*100:.0f}% 자동정지\n"
         f"명령: /status /score /halt /resume\n"
-        f"※ 명령은 위 봇({bot_label})에게만 보내야 작동"
+        f"⏰ 1시간마다 자동 리포트 옵니다"
     )
     print(f"[v7 boot] startup complete — entering main loop", flush=True)
 
@@ -376,12 +472,22 @@ def main():
             else:
                 # cooldown after a recent stop
                 if time.time() - _last_loss_ts > cfg.COOLDOWN_BARS_LOSS * 15 * 60:
+                    # D first (high-conviction trend setups)
                     sig = strat.evaluate_entry(df15, df1h, df4h)
                     if sig:
                         _try_open(equity, sig)
+                    else:
+                        # MR fallback (mean reversion in chop)
+                        mr_sig = strat.evaluate_mr_entry(df15, df4h)
+                        if mr_sig:
+                            _try_open(equity, mr_sig)
 
+            # 5) Periodic heartbeat (stdout, not Telegram)
             if _loop_count % 10 == 1:
                 _heartbeat(equity)
+
+            # 6) Hourly Telegram report
+            _maybe_hourly_report(equity, df15, df1h, df4h)
 
             time.sleep(cfg.LOOP_SEC)
 

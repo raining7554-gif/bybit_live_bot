@@ -13,6 +13,10 @@ from backtest.strategies.strategy_d import (
     _signal_strength, _rsi_crossed_50,
     ATR_STOP_MULT, ATR_TRAIL_MULT,
 )
+from backtest.strategies.strategy_mr import _check_signal as _mr_check_signal
+from backtest.strategies.strategy_mr import (
+    ATR_STOP_MULT as MR_ATR_STOP, LEV as MR_LEV,
+)
 
 
 def _leverage_for_score(score: float) -> float:
@@ -88,6 +92,51 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
         "stop_price":  float(stop),
         "entry_price": float(row.close),
         "atr_15m":     float(atr),
+    }
+
+
+def evaluate_mr_entry(df_15m: pd.DataFrame, df_4h: pd.DataFrame) -> Optional[dict]:
+    """Mean-reversion (MR) entry: oversold/overbought BB + chop ADX.
+
+    Fires when D is silent — different alpha for sideways markets.
+    Returns same-shape signal dict as evaluate_entry (for unified handling).
+    """
+    if len(df_15m) < 60:
+        return None
+    row = df_15m.iloc[-1]
+    row_h4 = df_4h.iloc[-1] if df_4h is not None and len(df_4h) > 0 else None
+
+    side, reason = _mr_check_signal(row, row_h4)
+    if side == "none":
+        return None
+
+    atr = row.atr
+    if pd.isna(atr) or atr <= 0:
+        return None
+
+    if side == "long":
+        order_side = "Buy"
+        stop = row.close - MR_ATR_STOP * atr
+        tp = row.bb_mid
+        if tp <= row.close:
+            return None
+    else:
+        order_side = "Sell"
+        stop = row.close + MR_ATR_STOP * atr
+        tp = row.bb_mid
+        if tp >= row.close:
+            return None
+
+    return {
+        "side":        order_side,
+        "score":       0.0,           # MR doesn't use D's score
+        "leverage":    float(MR_LEV),
+        "stop_price":  float(stop),
+        "tp_price":    float(tp),
+        "entry_price": float(row.close),
+        "atr_15m":     float(atr),
+        "tag":         f"MR_{side}",
+        "mr":          True,
     }
 
 
