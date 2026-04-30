@@ -34,11 +34,11 @@ import numpy as np
 import pandas as pd
 
 ATR_STOP_MULT = 1.5
-ADX_CHOP_MAX = 25.0
-RSI_OVERSOLD = 30.0
-RSI_OVERBOUGHT = 70.0
-BB_POS_LOW = 0.10
-BB_POS_HIGH = 0.90
+ADX_CHOP_MAX = 30.0    # v7-r1: 25 → 30 (more chop coverage)
+RSI_OVERSOLD = 35.0    # v7-r1: 30 → 35 (less extreme — fires more)
+RSI_OVERBOUGHT = 65.0  # v7-r1: 70 → 65
+BB_POS_LOW = 0.15      # v7-r1: 0.10 → 0.15
+BB_POS_HIGH = 0.85     # v7-r1: 0.90 → 0.85
 COOLDOWN_BARS_LOSS = 4
 COOLDOWN_BARS_WIN = 2
 LEV = 5.0    # raised from 2.0 to match v7-3tier policy

@@ -115,10 +115,11 @@ def main():
         print(f"\n== D leverage profile ==")
         print(f"  avg leverage: {np.mean(levs):.2f}x | min: {min(levs):.2f}x | max: {max(levs):.2f}x")
         print(f"  avg score:    {np.mean(scores):.1f}  | min: {min(scores):.0f} | max: {max(scores):.0f}")
-        # By bucket (v7-3tier)
-        buckets = {"70-80 (5x)": [], "80-90 (7x)": [], "90+ (10x)": []}
+        # By bucket (v7-r1)
+        buckets = {"60-70 (3x)": [], "70-80 (5x)": [], "80-90 (7x)": [], "90+ (10x)": []}
         for t, s in zip(res_d["trades"], scores):
-            if s < 80: buckets["70-80 (5x)"].append(t.pnl)
+            if s < 70: buckets["60-70 (3x)"].append(t.pnl)
+            elif s < 80: buckets["70-80 (5x)"].append(t.pnl)
             elif s < 90: buckets["80-90 (7x)"].append(t.pnl)
             else: buckets["90+ (10x)"].append(t.pnl)
         print(f"  bucket performance:")
