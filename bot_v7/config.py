@@ -24,15 +24,24 @@ MARGIN_PCT       = float(os.environ.get("MARGIN_PCT", "0.50"))
 # Max equity actually used by the bot (rest sits idle as buffer).
 CAPITAL_FRACTION = float(os.environ.get("CAPITAL_FRACTION", "1.00"))
 
-# ─── Strategy D v7-r1 (relaxed: 4 tiers + lower threshold + RSI direction) ──
-ENTRY_MIN_SCORE  = 60.0   # v7-r1: 70 → 60 (probe tier added)
-SCORE_TIER_PROBE = 70.0   # 60..69 -> probe (3x)
-SCORE_TIER_1     = 80.0   # 70..79 -> base (5x)
-SCORE_TIER_2     = 90.0   # 80..89 -> mid (7x); >=90 -> high (10x)
-LEV_TIER_PROBE   = 3.0    # 60..69 (NEW)
-LEV_TIER_BASE    = 5.0    # 70..79
-LEV_TIER_MID     = 7.0    # 80..89
-LEV_TIER_HIGH    = 10.0   # 90+
+# ─── Strategy D v8 (5-tier aggressive + asymmetric exit) ──
+ENTRY_MIN_SCORE   = 55.0   # v8: 60 → 55 (new micro tier)
+SCORE_TIER_MICRO  = 60.0   # 55..59 → 3x
+SCORE_TIER_PROBE  = 70.0   # 60..69 → 5x
+SCORE_TIER_BASE   = 80.0   # 70..79 → 10x
+SCORE_TIER_MID    = 90.0   # 80..89 → 15x; >=90 → 20x
+LEV_TIER_MICRO    = 3.0
+LEV_TIER_PROBE    = 5.0
+LEV_TIER_BASE     = 10.0
+LEV_TIER_MID      = 15.0
+LEV_TIER_HIGH     = 20.0
+
+# Per-tier exit policy (margin-% gain target; None = trail-only)
+TP_MARGIN_MICRO   = 0.03   # micro:  +3%  margin → close
+TP_MARGIN_PROBE   = 0.05   # probe:  +5%  margin → close
+TP_MARGIN_BASE    = 0.10   # base:   +10% margin → close
+TP1_MARGIN_MID    = 0.10   # mid:    +10% margin → 50% partial → BE+trail rest
+TP_MARGIN_HIGH    = None   # high:   no fixed TP — BE@+1R then chandelier trail
 
 # ─── Stop / trail ──────────────────────────────────────────────
 ATR_STOP_MULT  = 1.5

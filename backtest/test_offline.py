@@ -69,7 +69,7 @@ def main():
     cfg_v63d = BTConfig(initial_equity=1000.0, max_leverage=7.0, use_risk_sizing=False)
     cfg_risk = BTConfig(initial_equity=1000.0, max_leverage=5.0, use_risk_sizing=True, risk_per_trade=0.01)
     cfg_risk_half = BTConfig(initial_equity=1000.0, max_leverage=3.0, use_risk_sizing=True, risk_per_trade=0.005)
-    cfg_dyn = BTConfig(initial_equity=1000.0, max_leverage=10.0, use_risk_sizing=False)
+    cfg_dyn = BTConfig(initial_equity=1000.0, max_leverage=20.0, use_risk_sizing=False)
 
     print("\n== running v6.3d ==")
     res_v = run_backtest(df_15m, make_v63d(), cfg=cfg_v63d, df_1h=df_1h, df_4h=df_4h, df_1d=df_1d, warmup=300)
@@ -115,13 +115,15 @@ def main():
         print(f"\n== D leverage profile ==")
         print(f"  avg leverage: {np.mean(levs):.2f}x | min: {min(levs):.2f}x | max: {max(levs):.2f}x")
         print(f"  avg score:    {np.mean(scores):.1f}  | min: {min(scores):.0f} | max: {max(scores):.0f}")
-        # By bucket (v7-r1)
-        buckets = {"60-70 (3x)": [], "70-80 (5x)": [], "80-90 (7x)": [], "90+ (10x)": []}
+        # By bucket (v8 5-tier)
+        buckets = {"55-60 (3x)": [], "60-70 (5x)": [], "70-80 (10x)": [],
+                   "80-90 (15x)": [], "90+ (20x)": []}
         for t, s in zip(res_d["trades"], scores):
-            if s < 70: buckets["60-70 (3x)"].append(t.pnl)
-            elif s < 80: buckets["70-80 (5x)"].append(t.pnl)
-            elif s < 90: buckets["80-90 (7x)"].append(t.pnl)
-            else: buckets["90+ (10x)"].append(t.pnl)
+            if s < 60: buckets["55-60 (3x)"].append(t.pnl)
+            elif s < 70: buckets["60-70 (5x)"].append(t.pnl)
+            elif s < 80: buckets["70-80 (10x)"].append(t.pnl)
+            elif s < 90: buckets["80-90 (15x)"].append(t.pnl)
+            else: buckets["90+ (20x)"].append(t.pnl)
         print(f"  bucket performance:")
         for k, v in buckets.items():
             if v:

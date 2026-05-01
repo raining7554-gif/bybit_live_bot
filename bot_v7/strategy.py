@@ -10,7 +10,7 @@ import pandas as pd
 from . import config as cfg
 from backtest.indicators import add_all_15m, add_basic_1h, add_basic_4h
 from backtest.strategies.strategy_d import (
-    _signal_strength, _rsi_crossed_50, _rsi_directional,
+    _signal_strength, tier_for_score,
     ATR_STOP_MULT, ATR_TRAIL_MULT,
 )
 from backtest.strategies.strategy_mr import _check_signal as _mr_check_signal
@@ -20,12 +20,24 @@ from backtest.strategies.strategy_mr import (
 
 
 def _leverage_for_score(score: float) -> float:
-    """v7-r1 4-tier map: 3x (probe) / 5x / 7x / 10x. Threshold 60."""
-    if score < cfg.ENTRY_MIN_SCORE:  return 0.0           # < 60 → skip
-    if score < cfg.SCORE_TIER_PROBE: return cfg.LEV_TIER_PROBE  # 60..69
-    if score < cfg.SCORE_TIER_1:     return cfg.LEV_TIER_BASE   # 70..79
-    if score < cfg.SCORE_TIER_2:     return cfg.LEV_TIER_MID    # 80..89
-    return cfg.LEV_TIER_HIGH                                    # 90+
+    """v8 5-tier map: 3x / 5x / 10x / 15x / 20x. Threshold 55."""
+    if score < cfg.ENTRY_MIN_SCORE:   return 0.0            # < 55 → skip
+    if score < cfg.SCORE_TIER_MICRO:  return cfg.LEV_TIER_MICRO  # 55..59
+    if score < cfg.SCORE_TIER_PROBE:  return cfg.LEV_TIER_PROBE  # 60..69
+    if score < cfg.SCORE_TIER_BASE:   return cfg.LEV_TIER_BASE   # 70..79
+    if score < cfg.SCORE_TIER_MID:    return cfg.LEV_TIER_MID    # 80..89
+    return cfg.LEV_TIER_HIGH                                     # 90+
+
+
+def _tp_margin_for_tier(tier: str):
+    """Returns the margin-% TP target for given tier, or None for trail-only."""
+    return {
+        "micro": cfg.TP_MARGIN_MICRO,
+        "probe": cfg.TP_MARGIN_PROBE,
+        "base":  cfg.TP_MARGIN_BASE,
+        "mid":   cfg.TP1_MARGIN_MID,    # partial TP1
+        "high":  cfg.TP_MARGIN_HIGH,    # None → trail only
+    }.get(tier)
 
 
 def compute_indicators(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
@@ -36,11 +48,8 @@ def compute_indicators(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
 
 def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
                    df_4h: pd.DataFrame) -> Optional[dict]:
-    """Returns entry signal dict or None.
-
-    Signal dict:
-      {"side": "Buy"|"Sell", "score": float, "leverage": float,
-       "stop_price": float, "entry_price": float, "atr_15m": float}
+    """v8 entry. RSI directional check REMOVED. Score >= 55 + 4H bias (EMA50)
+    + 15m candle alignment.
     """
     if len(df_15m) < 60 or len(df_1h) < 60 or len(df_4h) < 60:
         return None
@@ -53,14 +62,9 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
     if direction == "none" or score < cfg.ENTRY_MIN_SCORE:
         return None
 
-    # 1H RSI directional check (v7-r1: relaxed from strict cross)
-    # Long: RSI > 50 (sustained bull) OR cross up in last 4 bars
-    # Short: RSI < 50 OR cross down
-    rsi_recent = df_1h["rsi"].tail(5)
-    if not _rsi_directional(rsi_recent, direction, lookback=4):
-        return None
+    # v8: RSI directional check REMOVED entirely
 
-    # 15m candle confirmation
+    # 15m candle confirmation (kept — small filter)
     if direction == "long" and row.close <= row.open:
         return None
     if direction == "short" and row.close >= row.open:
@@ -81,13 +85,18 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
     if lev <= 0:
         return None
 
+    tier = tier_for_score(score)
+    tp_margin = _tp_margin_for_tier(tier)
+
     return {
-        "side":        side,
-        "score":       float(score),
-        "leverage":    float(lev),
-        "stop_price":  float(stop),
-        "entry_price": float(row.close),
-        "atr_15m":     float(atr),
+        "side":         side,
+        "score":        float(score),
+        "leverage":     float(lev),
+        "stop_price":   float(stop),
+        "entry_price":  float(row.close),
+        "atr_15m":      float(atr),
+        "tier":         tier,
+        "tp_margin":    tp_margin,         # None for high tier
     }
 
 
@@ -136,43 +145,79 @@ def evaluate_mr_entry(df_15m: pd.DataFrame, df_4h: pd.DataFrame) -> Optional[dic
     }
 
 
-def evaluate_position_management(pos: dict, atr_15m: float,
-                                 last_high: float, last_low: float
-                                 ) -> Optional[float]:
-    """Returns new stop price if it should be tightened, else None.
+def evaluate_position_management(pos: dict, atr_15m: float, current_price: float,
+                                 last_high: float, last_low: float) -> Optional[dict]:
+    """v8 tier-aware exit logic.
 
-    pos must contain: side ('Buy'/'Sell'), entry, current_stop, init_stop, be_done
+    Returns one of:
+      None                                  → no action
+      {"action": "close", "reason": "tp"}   → fixed TP hit (micro/probe/base)
+      {"action": "scale_out", "ratio": 0.5} → mid tier TP1 partial
+      {"action": "modify_stop", "stop": x}  → BE move or trail update
     """
     side = pos["side"]
     entry = pos["entry"]
+    leverage = pos.get("leverage", 1.0)
+    tier = pos.get("tier", "high")
+    tp_margin = pos.get("tp_margin")
     init_stop = pos["init_stop"]
     cur_stop = pos["current_stop"]
     R = abs(entry - init_stop)
-    if R <= 0 or atr_15m <= 0:
+    if R <= 0:
         return None
 
+    # Compute current margin gain (= price gain × leverage)
     if side == "Buy":
-        # Break-even at +1R
+        price_chg = (current_price - entry) / entry
+    else:
+        price_chg = (entry - current_price) / entry
+    margin_pct = price_chg * leverage
+
+    # ---- Fixed-TP tiers: full close at target ----
+    if tier in ("micro", "probe", "base") and tp_margin is not None:
+        if margin_pct >= tp_margin:
+            return {"action": "close", "reason": "fixed_tp"}
+        return None
+
+    # ---- Mid tier: TP1 partial 50% then BE+trail rest ----
+    if tier == "mid":
+        if not pos.get("scale_done") and tp_margin is not None and margin_pct >= tp_margin:
+            return {"action": "scale_out", "ratio": 0.5}
+        if pos.get("scale_done"):
+            return _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low)
+        return None
+
+    # ---- High tier: BE @ +1R then chandelier (no fixed TP) ----
+    if tier == "high":
+        return _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low)
+
+    return None
+
+
+def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low):
+    """Shared BE + chandelier helper for mid (post-partial) and high tiers."""
+    if atr_15m <= 0:
+        return None
+    if side == "Buy":
         if not pos.get("be_done") and (last_high - entry) >= R:
             new_stop = entry
             if new_stop > cur_stop:
                 pos["be_done"] = True
-                return new_stop
-        # Chandelier trail after BE
+                return {"action": "modify_stop", "stop": new_stop}
         if pos.get("be_done"):
             cand = last_high - ATR_TRAIL_MULT * atr_15m
             if cand > cur_stop:
-                return cand
+                return {"action": "modify_stop", "stop": cand}
     else:  # Sell
         if not pos.get("be_done") and (entry - last_low) >= R:
             new_stop = entry
             if new_stop < cur_stop:
                 pos["be_done"] = True
-                return new_stop
+                return {"action": "modify_stop", "stop": new_stop}
         if pos.get("be_done"):
             cand = last_low + ATR_TRAIL_MULT * atr_15m
             if cand < cur_stop:
-                return cand
+                return {"action": "modify_stop", "stop": cand}
     return None
 
 

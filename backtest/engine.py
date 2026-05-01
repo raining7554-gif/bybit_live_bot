@@ -216,6 +216,32 @@ def run_backtest(
                 pos.stop = new_stop
             elif pos.side == "short" and new_stop < pos.stop:
                 pos.stop = new_stop
+        elif action == "scale_out" and pos is not None:
+            # Partial close — close `ratio` of position size, log as a trade,
+            # leave the remainder open with reduced size.
+            ratio = float(sig.get("ratio", 0.5))
+            ratio = max(0.0, min(0.99, ratio))
+            exit_price = close_[i] * (1 - cfg.slippage if pos.side == "long" else 1 + cfg.slippage)
+            close_size = pos.size * ratio
+            if close_size <= 0:
+                continue
+            if pos.side == "long":
+                raw_pct = (exit_price - pos.entry) / pos.entry
+            else:
+                raw_pct = (pos.entry - exit_price) / pos.entry
+            notional_part = close_size * pos.entry
+            pnl = notional_part * raw_pct
+            fees = notional_part * cfg.taker_fee + (close_size * exit_price) * cfg.taker_fee
+            pnl -= fees
+            equity += pnl
+            trades.append(Trade(
+                entry_dt=pos.entry_dt, exit_dt=idx_[i], side=pos.side,
+                entry=pos.entry, exit=exit_price, size=close_size,
+                leverage=pos.leverage, pnl=pnl, pnl_pct=raw_pct - 2 * cfg.taker_fee,
+                fees=fees, reason="scale_out",
+                tag=pos.tag + "_partial", bars=i - pos.entry_idx
+            ))
+            pos.size -= close_size
 
     return {
         "trades": trades,

@@ -147,6 +147,27 @@ def close_position_market(symbol: str, side_open: str, qty: float) -> bool:
         return False
 
 
+def partial_close_market(symbol: str, side_open: str, partial_qty: float) -> bool:
+    """Reduce-only market order for a fraction of the open position.
+    Used by mid-tier TP1 (50% scale-out)."""
+    close_side = "Sell" if side_open == "Buy" else "Buy"
+    qty = _round_qty(symbol, partial_qty)
+    if qty <= 0:
+        return False
+    try:
+        r = session().place_order(
+            category="linear", symbol=symbol,
+            side=close_side, orderType="Market",
+            qty=str(qty),
+            positionIdx=0,
+            reduceOnly=True,
+        )
+        return r.get("retCode") == 0
+    except Exception as e:
+        print(f"[partial close err] {e}", flush=True)
+        return False
+
+
 def update_stop_loss(symbol: str, side_open: str, new_sl_price: float) -> bool:
     """Update server-side trailing stop. side_open is the original side ('Buy'/'Sell')."""
     try:
