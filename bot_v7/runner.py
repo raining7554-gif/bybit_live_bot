@@ -142,14 +142,18 @@ def _try_open(equity: float, signal: dict):
     final_stop = max(strat_stop, disaster_sl) if side == "Buy" else min(strat_stop, disaster_sl)
     ex.update_stop_loss(cfg.SYMBOL, side, final_stop)
 
-    tp_price = signal.get("tp_price")  # MR uses fixed TP at BB midline; D = None
+    tp_price = signal.get("tp_price")          # MR only — fixed BB-mid price target
+    tier = signal.get("tier", "high")           # D only — used by exit policy
+    tp_margin = signal.get("tp_margin")         # D only — margin-% target or None
 
     _pos.update({
         "side": side, "entry": entry_price, "size": qty,
         "leverage": lev, "score": signal["score"],
         "init_stop": signal["stop_price"], "current_stop": final_stop,
-        "be_done": False, "atr_15m": signal["atr_15m"],
-        "tp_price": tp_price,
+        "be_done": False, "scale_done": False, "atr_15m": signal["atr_15m"],
+        "tp_price": tp_price,                   # MR price-based TP
+        "tier": tier,
+        "tp_margin": tp_margin,
         "strategy": "MR" if is_mr else "D",
         "opened_ts": time.time(),
     })
@@ -165,24 +169,32 @@ def _try_open(equity: float, signal: dict):
             f"잔고: ${equity:,.2f}"
         )
     else:
+        tier_kr = {"micro": "마이크로", "probe": "프로브",
+                   "base": "베이스", "mid": "미드", "high": "하이"}.get(tier, tier)
+        tp_str = (f"+{tp_margin*100:.0f}% 마진" if tp_margin is not None
+                  else "트레일만 (고정 TP X)")
         tg.send(
             f"📈 {cfg.SYMBOL} D 진입 ({'롱' if side=='Buy' else '숏'})\n"
-            f"점수: {signal['score']:.1f} → 레버리지 {lev:.1f}x\n"
+            f"점수: {signal['score']:.1f} → tier {tier_kr} (lev {lev:.1f}x)\n"
             f"가격: ${entry_price:.2f} | qty: {qty}\n"
             f"손절: ${final_stop:.2f} ({(final_stop/entry_price-1)*100:+.2f}%)\n"
+            f"익절: {tp_str}\n"
             f"잔고: ${equity:,.2f} | 증거금: ${equity*cfg.MARGIN_PCT*cfg.CAPITAL_FRACTION:,.2f}"
         )
 
 
 def _manage(df_15m: pd.DataFrame):
-    """Update trailing stop on existing position.
-    MR positions do NOT trail — they exit at fixed BB-mid TP or initial stop.
+    """Tier-aware exit management. v8.
+
+    MR  : static stop + fixed BB-mid TP price target (manual close on touch)
+    D   : tier-based exit policy
+        micro/probe/base : margin-% TP target → full close
+        mid              : margin-% TP1 → 50% partial close → BE+chandelier rest
+        high             : BE @ +1R → chandelier trail (no fixed TP)
     """
     if not _pos:
         return
     if _pos.get("strategy") == "MR":
-        # MR: hold static stop + TP, no trailing (mean reversion target)
-        # Check if price has reached TP (engine-side TP not in v7 — manual)
         tp = _pos.get("tp_price")
         if tp:
             cur_px = float(df_15m["close"].iloc[-1])
@@ -190,11 +202,38 @@ def _manage(df_15m: pd.DataFrame):
                (_pos["side"] == "Sell" and cur_px <= tp):
                 _close_current("mr_tp", cur_px, ex.get_balance())
         return
-    last_high = df_15m["high"].iloc[-1]
-    last_low = df_15m["low"].iloc[-1]
-    atr_15m = df_15m["atr"].iloc[-1] if "atr" in df_15m.columns else _pos.get("atr_15m", 0)
-    new_stop = strat.evaluate_position_management(_pos, atr_15m, last_high, last_low)
-    if new_stop is not None:
+
+    # D strategy
+    last_high = float(df_15m["high"].iloc[-1])
+    last_low  = float(df_15m["low"].iloc[-1])
+    cur_px    = float(df_15m["close"].iloc[-1])
+    atr_15m   = float(df_15m["atr"].iloc[-1]) if "atr" in df_15m.columns else _pos.get("atr_15m", 0)
+
+    decision = strat.evaluate_position_management(_pos, atr_15m, cur_px, last_high, last_low)
+    if not decision:
+        return
+    act = decision.get("action")
+
+    if act == "close":
+        _close_current(decision.get("reason", "tp"), cur_px, ex.get_balance())
+        return
+
+    if act == "scale_out":
+        ratio = float(decision.get("ratio", 0.5))
+        partial_qty = _pos["size"] * ratio
+        if ex.partial_close_market(cfg.SYMBOL, _pos["side"], partial_qty):
+            _pos["size"] -= partial_qty
+            _pos["scale_done"] = True
+            st.save(_pos)
+            tg.send(
+                f"🟦 {cfg.SYMBOL} TP1 부분익절 50%\n"
+                f"점수 tier {_pos.get('tier','?')} | 남은 수량 {_pos['size']:.4f}\n"
+                f"이제 BE → 챈들리어 트레일"
+            )
+        return
+
+    if act == "modify_stop":
+        new_stop = float(decision["stop"])
         if ex.update_stop_loss(cfg.SYMBOL, _pos["side"], new_stop):
             _pos["current_stop"] = new_stop
             st.save(_pos)
@@ -424,14 +463,15 @@ def main():
         f"봇: {bot_label}\n"
         f"심볼: {cfg.SYMBOL} | testnet: {cfg.TESTNET}\n"
         f"잔고: ${eq0:,.2f} | 가격: ${px0:,.2f}\n"
-        f"━ D 전략 (추세, v7-r1 완화) ━\n"
-        f"증거금 {cfg.MARGIN_PCT*100:.0f}% × 레버리지 3/5/7/10x\n"
-        f"  점수 60-69 → 3x (probe)\n"
-        f"  점수 70-79 → 5x\n"
-        f"  점수 80-89 → 7x\n"
-        f"  점수 90+ → 10x\n"
-        f"  RSI 방향성 (50 돌파 강제 X)\n"
-        f"━ MR 전략 (평균회귀, 완화) ━\n"
+        f"━ D 전략 (v8 공격형 + 비대칭 익절) ━\n"
+        f"증거금 {cfg.MARGIN_PCT*100:.0f}% × 레버리지 3/5/10/15/20x\n"
+        f"  55-59 → 3x  / TP +3% 마진\n"
+        f"  60-69 → 5x  / TP +5% 마진\n"
+        f"  70-79 → 10x / TP +10% 마진\n"
+        f"  80-89 → 15x / TP1 +10% 부분익절 → 트레일\n"
+        f"  90+   → 20x / 트레일만 (끝까지)\n"
+        f"  4H bias EMA50 (단기 추세) + RSI 체크 X\n"
+        f"━ MR 전략 (평균회귀) ━\n"
         f"BB 0.15/0.85 + ADX<30 + RSI 35/65\n"
         f"고정 lev 5.0x, TP=BB 중간선\n"
         f"━ 안전 (사용자 모니터링 가정) ━\n"

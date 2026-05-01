@@ -54,19 +54,19 @@ TP_SCALE_R = 2.0
 def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
     """Returns (score 0..100, direction 'long'|'short'|'none').
 
-    v6 changes vs v5:
-      - 4H bias loosened: close vs EMA200 only (drops EMA50 > EMA200 requirement)
-      - MTF non-binary: 20 (strict agree) / 12 (1H neutral) / 0 (oppose)
-      - Entry threshold can be lowered to 55 in tier table
+    v8 changes vs v7-r1:
+      - 4H bias even shorter: close vs EMA50 (was EMA200)
+      - MTF non-binary: 20 / 15 / 0 (was 20/12/0 — neutral gets more credit)
+      - RSI directional check moved out of _signal_strength entirely
     """
-    if row_h4 is None or pd.isna(row_h4.get("ema200", np.nan)):
+    if row_h4 is None or pd.isna(row_h4.get("ema50", np.nan)):
         return 0.0, "none"
-    if row_h1 is None or pd.isna(row_h1.get("rsi", np.nan)):
+    if row_h1 is None or pd.isna(row_h1.get("ema50", np.nan)):
         return 0.0, "none"
 
-    # 4H trend direction — v6 looser (drop EMA50 > EMA200)
-    long_bias = row_h4.close > row_h4.ema200
-    short_bias = row_h4.close < row_h4.ema200
+    # 4H trend direction — v8: close vs EMA50 (shorter trend, more entries)
+    long_bias = row_h4.close > row_h4.ema50
+    short_bias = row_h4.close < row_h4.ema50
     if not (long_bias or short_bias):
         return 0.0, "none"
     direction = "long" if long_bias else "short"
@@ -83,7 +83,7 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
     vr = row.vol_ratio if not pd.isna(row.vol_ratio) else 1.0
     vol_pt = max(0, min(25, (vr - 0.9) / 0.5 * 25))
 
-    # MTF agreement (0..20) — v6 non-binary: 20 / 12 / 0
+    # MTF agreement (0..20) — v8: 20 / 15 / 0 (neutral gets more credit than v7-r1's 12)
     if not pd.isna(row_h1.get("ema50", np.nan)) and row_h1.ema50 > 0:
         h1_dist = (row_h1.close - row_h1.ema50) / row_h1.ema50
     else:
@@ -94,7 +94,7 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
     if (long_bias and h1_long) or (short_bias and h1_short):
         mtf_pt = 20
     elif h1_neutral:
-        mtf_pt = 12
+        mtf_pt = 15
     else:
         mtf_pt = 0
 
@@ -103,12 +103,23 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
 
 
 def _leverage_and_risk(score: float) -> tuple[float, float]:
-    """v7-r1 4-tier: 3x / 5x / 7x / 10x. Lower threshold to 60."""
-    if score < 60: return 0.0, 0.0
-    if score < 70: return 3.0,  0.009    # NEW probe — small step before 5x
-    if score < 80: return 5.0,  0.014
-    if score < 90: return 7.0,  0.020
-    return 10.0, 0.029
+    """v8 5-tier aggressive: 3x/5x/10x/15x/20x. Threshold 55."""
+    if score < 55: return 0.0, 0.0
+    if score < 60: return 3.0,  0.009    # micro
+    if score < 70: return 5.0,  0.014    # probe
+    if score < 80: return 10.0, 0.029    # base
+    if score < 90: return 15.0, 0.043    # mid
+    return 20.0, 0.057                    # high
+
+
+def tier_for_score(score: float) -> str:
+    """v8 string label per tier — used for exit policy lookup."""
+    if score < 55: return "skip"
+    if score < 60: return "micro"
+    if score < 70: return "probe"
+    if score < 80: return "base"
+    if score < 90: return "mid"
+    return "high"
 
 
 def _rsi_crossed_50(rsi_series: pd.Series, lookback: int = 4) -> str:
@@ -161,31 +172,70 @@ def make_strategy():
             high = ctx["high"]
             low = ctx["low"]
             atr15 = row.atr if not pd.isna(row.atr) else 0
+            tier = pos.extras.get("tier", "high")
+            tp_margin = pos.extras.get("tp_margin")  # None or float
+            leverage = pos.leverage
             init_stop = pos.extras.get("init_stop", pos.stop)
             R = abs(pos.entry - init_stop)
             if R <= 0:
                 return None
 
+            # Compute current margin gain
             if pos.side == "long":
-                pnl = close - pos.entry
-                # break-even at +1R
-                if not pos.extras.get("be_done") and pnl >= R:
-                    pos.extras["be_done"] = True
-                    return {"action": "modify_stop", "stop": pos.entry}
-                # Chandelier trail after BE
-                if pos.extras.get("be_done") and atr15 > 0:
-                    cand = high - ATR_TRAIL_MULT * atr15
-                    if cand > pos.stop:
-                        return {"action": "modify_stop", "stop": cand}
+                price_chg = (close - pos.entry) / pos.entry
             else:
-                pnl = pos.entry - close
-                if not pos.extras.get("be_done") and pnl >= R:
-                    pos.extras["be_done"] = True
-                    return {"action": "modify_stop", "stop": pos.entry}
-                if pos.extras.get("be_done") and atr15 > 0:
-                    cand = low + ATR_TRAIL_MULT * atr15
-                    if cand < pos.stop:
-                        return {"action": "modify_stop", "stop": cand}
+                price_chg = (pos.entry - close) / pos.entry
+            margin_pct = price_chg * leverage
+
+            # Tiers with fixed TP (full close at target)
+            if tier in ("micro", "probe", "base") and tp_margin is not None:
+                if margin_pct >= tp_margin:
+                    return {"action": "close", "reason": "fixed_tp"}
+                return None
+
+            # Mid tier: TP1 partial 50% then BE+trail rest
+            if tier == "mid":
+                if not pos.extras.get("scale_done") and tp_margin is not None and margin_pct >= tp_margin:
+                    pos.extras["scale_done"] = True
+                    return {"action": "scale_out", "ratio": 0.5}
+                # After partial: BE then chandelier trail
+                if pos.extras.get("scale_done"):
+                    if pos.side == "long":
+                        if not pos.extras.get("be_done") and (high - pos.entry) >= R:
+                            pos.extras["be_done"] = True
+                            return {"action": "modify_stop", "stop": pos.entry}
+                        if pos.extras.get("be_done") and atr15 > 0:
+                            cand = high - ATR_TRAIL_MULT * atr15
+                            if cand > pos.stop:
+                                return {"action": "modify_stop", "stop": cand}
+                    else:
+                        if not pos.extras.get("be_done") and (pos.entry - low) >= R:
+                            pos.extras["be_done"] = True
+                            return {"action": "modify_stop", "stop": pos.entry}
+                        if pos.extras.get("be_done") and atr15 > 0:
+                            cand = low + ATR_TRAIL_MULT * atr15
+                            if cand < pos.stop:
+                                return {"action": "modify_stop", "stop": cand}
+                return None
+
+            # High tier: BE @ +1R then chandelier trail (no fixed TP)
+            if tier == "high":
+                if pos.side == "long":
+                    if not pos.extras.get("be_done") and (high - pos.entry) >= R:
+                        pos.extras["be_done"] = True
+                        return {"action": "modify_stop", "stop": pos.entry}
+                    if pos.extras.get("be_done") and atr15 > 0:
+                        cand = high - ATR_TRAIL_MULT * atr15
+                        if cand > pos.stop:
+                            return {"action": "modify_stop", "stop": cand}
+                else:
+                    if not pos.extras.get("be_done") and (pos.entry - low) >= R:
+                        pos.extras["be_done"] = True
+                        return {"action": "modify_stop", "stop": pos.entry}
+                    if pos.extras.get("be_done") and atr15 > 0:
+                        cand = low + ATR_TRAIL_MULT * atr15
+                        if cand < pos.stop:
+                            return {"action": "modify_stop", "stop": cand}
             return None
 
         # ----- cooldown -----
@@ -194,16 +244,9 @@ def make_strategy():
 
         # ----- compute signal strength -----
         score, direction = _signal_strength(row, row_h1, row_h4)
-        if direction == "none" or score < 60:    # v7-r1: lowered to 60 (probe tier)
+        if direction == "none" or score < 55:    # v8: threshold 55
             return None
-
-        # ----- 1H RSI directional check (was: strict cross) -----
-        h1_window = h1.iloc[max(0, i - 16):i + 1]
-        if len(h1_window) < 16:
-            return None
-        rsi_unique = h1_window["rsi"].drop_duplicates().tail(5)
-        if not _rsi_directional(rsi_unique, direction, lookback=4):
-            return None
+        # v8: RSI directional check REMOVED entirely
 
         # ----- candle confirmation -----
         if direction == "long" and row.close <= row.open:
@@ -240,19 +283,30 @@ def make_strategy():
         notional = min(notional, max_notional)
         size_pct_eff = notional / (equity * cfg.max_leverage) if cfg.max_leverage > 0 else 0
 
+        # v8: per-tier exit policy
+        tier = tier_for_score(score)
+        tp_margin_map = {
+            "micro": 0.03, "probe": 0.05, "base": 0.10,
+            "mid":   0.10, "high":  None,
+        }
+        tp_margin = tp_margin_map.get(tier)
+
         return {
             "action": "open",
             "side": direction,
             "stop": float(stop),
-            "tp": None,
+            "tp": None,                        # tp via in-strategy logic
             "size_pct": float(size_pct_eff),
             "tag": f"D_{direction}_s{int(score)}_lev{int(lev)}",
             "extras": {
                 "init_stop": float(stop),
                 "be_done": False,
+                "scale_done": False,
                 "score": float(score),
                 "leverage_chosen": float(lev),
                 "risk_chosen": float(risk),
+                "tier": tier,
+                "tp_margin": tp_margin,
             },
         }
 
