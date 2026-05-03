@@ -14,15 +14,16 @@ from typing import Optional
 from . import config as cfg
 
 
-# ─── LIMITS (relaxed v7-3tier — user actively monitoring) ──────
-# Raised from -3/-7/-12 to -7/-15/-25 because the new tier map allows
-# 10x leverage at score >= 90, where a single 1.5*ATR stop can hit -2.85%
-# equity. Tighter limits would halt on a single losing high-score trade.
-DAILY_LOSS_LIMIT_PCT   = -0.07   # -7% intra-day → 24h halt
-WEEKLY_LOSS_LIMIT_PCT  = -0.15   # -15% rolling 7d → 7d halt
-MONTHLY_LOSS_LIMIT_PCT = -0.25   # -25% rolling 30d → 30d halt (catches
-                                  # before reaching v6.3d's -35% disaster)
-LIQ_DISTANCE_DOWNSIZE  = 0.10    # if any open pos liq distance < 10%, downsize
+# ─── LIMITS (v9: AUTO-halt disabled, manual /halt only) ───────
+# User explicitly removed automatic portfolio-level stops. The disaster
+# server-side SL (-2% price per trade) is still active and is the only
+# remaining automated risk control. /halt and /resume Telegram commands
+# remain available for manual intervention.
+AUTO_HALT_ENABLED      = False   # master switch — flips off all auto triggers
+DAILY_LOSS_LIMIT_PCT   = -1.00   # effectively never (-100%)
+WEEKLY_LOSS_LIMIT_PCT  = -1.00
+MONTHLY_LOSS_LIMIT_PCT = -1.00
+LIQ_DISTANCE_DOWNSIZE  = 0.10    # currently unused
 
 DAY_SEC   = 86400
 WEEK_SEC  = 604800
@@ -74,12 +75,15 @@ def _ensure_anchor(equity: float, anchor_eq: float, anchor_ts: float,
 
 
 def update_and_check(s: SafetyState, equity: float) -> tuple[bool, str]:
-    """Refresh anchors, check rolling drawdowns, set halts. Returns (halted, reason)."""
+    """Refresh anchors. v9: auto-halt disabled — only manual /halt triggers
+    halt_until_day. Anchors still tracked so 'today PnL' display works.
+    Returns (halted, reason).
+    """
     now = time.time()
     if equity <= 0:
         return False, ""
 
-    # Refresh rolling anchors when window expires
+    # Refresh rolling anchors (still needed for `오늘 PnL` display)
     s.day_anchor_equity,   s.day_anchor_ts   = _ensure_anchor(
         equity, s.day_anchor_equity,   s.day_anchor_ts,   DAY_SEC)
     s.week_anchor_equity,  s.week_anchor_ts  = _ensure_anchor(
@@ -87,7 +91,14 @@ def update_and_check(s: SafetyState, equity: float) -> tuple[bool, str]:
     s.month_anchor_equity, s.month_anchor_ts = _ensure_anchor(
         equity, s.month_anchor_equity, s.month_anchor_ts, MONTH_SEC)
 
-    # Compute rolling drawdowns
+    # v9: auto triggers DISABLED — block the entire halt-arming block
+    if not AUTO_HALT_ENABLED:
+        # Manual halt (set by /halt command) still respected below
+        if now < s.halt_until_day:
+            return True, f"manual halt until {time.strftime('%m-%d %H:%M', time.localtime(s.halt_until_day))}"
+        return False, ""
+
+    # ---- Below this line: auto-halt logic, currently dead code ----
     def dd(anchor: float) -> float:
         return (equity - anchor) / anchor if anchor > 0 else 0.0
 
@@ -95,7 +106,6 @@ def update_and_check(s: SafetyState, equity: float) -> tuple[bool, str]:
     week_dd  = dd(s.week_anchor_equity)
     month_dd = dd(s.month_anchor_equity)
 
-    # Trigger halts (cumulative — most severe wins)
     if month_dd <= MONTHLY_LOSS_LIMIT_PCT and now >= s.halt_until_month:
         s.halt_until_month = now + MONTH_SEC
         s.last_halt_reason = f"MONTHLY -{abs(month_dd)*100:.1f}% → 30d halt"
@@ -122,17 +132,10 @@ def update_and_check(s: SafetyState, equity: float) -> tuple[bool, str]:
 
 
 def status_lines(s: SafetyState, equity: float) -> list[str]:
-    """Human-readable lines for /status command."""
-    def pct(anchor: float) -> str:
-        if anchor <= 0:
-            return "n/a"
-        return f"{(equity-anchor)/anchor*100:+.2f}%"
-    out = [
-        f"일: {pct(s.day_anchor_equity)} (한도 {DAILY_LOSS_LIMIT_PCT*100:.0f}%)",
-        f"주: {pct(s.week_anchor_equity)} (한도 {WEEKLY_LOSS_LIMIT_PCT*100:.0f}%)",
-        f"월: {pct(s.month_anchor_equity)} (한도 {MONTHLY_LOSS_LIMIT_PCT*100:.0f}%)",
-    ]
+    """Human-readable lines for /status command. v9: auto-halt off, only
+    show a halt indicator if a manual halt is active."""
+    out = []
     now = time.time()
-    if now < s.halt_until_day or now < s.halt_until_week or now < s.halt_until_month:
-        out.append(f"⛔ {s.last_halt_reason}")
+    if now < s.halt_until_day:
+        out.append(f"⛔ 수동 정지 중 ({s.last_halt_reason})")
     return out

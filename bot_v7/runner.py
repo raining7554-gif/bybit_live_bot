@@ -494,7 +494,8 @@ def main():
         f"━ MR (평균회귀) ━\n"
         f"  5x / 증거금 50% / BB 중간선 TP\n"
         f"━ 안전 ━\n"
-        f"일{safety.DAILY_LOSS_LIMIT_PCT*100:.0f}% / 주{safety.WEEKLY_LOSS_LIMIT_PCT*100:.0f}% / 월{safety.MONTHLY_LOSS_LIMIT_PCT*100:.0f}% 자동정지\n"
+        f"자동 정지 OFF (수동 /halt 가능)\n"
+        f"서버사이드 -2% SL 모든 진입에 부착\n"
         f"명령: /status /score /halt /resume\n"
         f"⏰ KST 정각마다 리포트"
     )
