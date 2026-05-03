@@ -74,6 +74,14 @@ STATE_PATH      = os.environ.get("STATE_PATH",      "/data/state_v7.json")
 TRADE_LOG_PATH  = os.environ.get("TRADE_LOG_PATH",  "/data/trades_v7.jsonl")
 SAFETY_PATH     = os.environ.get("SAFETY_PATH",     "/data/safety_v7.json")
 
+# ─── AI layer (Gemini free tier) ───────────────────────────────
+# Disabled unless GEMINI_API_KEY is set AND AI_ENABLED=true.
+GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
+AI_ENABLED      = os.environ.get("AI_ENABLED", "false").lower() == "true"
+AI_MODEL        = os.environ.get("AI_MODEL", "gemini-2.0-flash")
+# Regime detection cadence (seconds). Free tier easily handles 1h.
+AI_REGIME_INTERVAL_SEC = int(os.environ.get("AI_REGIME_INTERVAL_SEC", "3600"))
+
 # ─── Symbol decimals (price + qty) ─────────────────────────────
 PRICE_DECIMALS = {"BTCUSDT": 1, "ETHUSDT": 2, "SOLUSDT": 3, "XRPUSDT": 4, "LINKUSDT": 3}
 QTY_DECIMALS   = {"BTCUSDT": 3, "ETHUSDT": 2, "SOLUSDT": 1, "XRPUSDT": 0, "LINKUSDT": 1}

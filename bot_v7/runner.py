@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 
+from . import ai
 from . import config as cfg
 from . import exchange as ex
 from . import notifier as tg
@@ -22,6 +23,7 @@ _last_loss_ts: float = 0.0  # cooldown after a stop
 _safety = None             # SafetyState
 _loop_count = 0
 _last_report_kst_hour: int = -1  # KST hour we last sent the hourly report for
+_last_regime_call_ts: float = 0.0  # last AI regime detection call
 
 
 KST = timezone(timedelta(hours=9))
@@ -136,7 +138,7 @@ def _close_current(reason: str, fill_price: float, equity_before: float):
     pnl_dollar = notional * pnl_pct
     emoji = "✅" if pnl_dollar >= 0 else "❌"
 
-    st.log_trade({
+    rec = {
         "ts": time.time(),
         "symbol": cfg.SYMBOL, "side": side,
         "entry": entry, "exit": fill_price,
@@ -145,11 +147,16 @@ def _close_current(reason: str, fill_price: float, equity_before: float):
         "pnl": round(pnl_dollar, 4), "pnl_pct": round(pnl_pct, 6),
         "reason": reason, "tier": _pos.get("tier", "?"),
         "strategy": _pos.get("strategy", "D"),
-    })
+    }
+    st.log_trade(rec)
+    entry_snapshot = _pos.get("entry_snapshot") or {}
     if pnl_dollar < 0:
         _last_loss_ts = time.time()
     _pos.clear()
     st.save(None)
+
+    # Best-effort post-mortem (background thread, no-op if AI disabled)
+    ai.analyze_trade_async(rec, entry_snapshot)
 
     # Refresh today's PnL after this trade settles into balance
     new_eq = ex.get_balance() or equity_before + pnl_dollar
@@ -161,8 +168,13 @@ def _close_current(reason: str, fill_price: float, equity_before: float):
     )
 
 
-def _try_open(equity: float, signal: dict):
-    """Open new position from a signal dict (D or MR)."""
+def _try_open(equity: float, signal: dict, snapshot: dict | None = None):
+    """Open new position from a signal dict (D or MR).
+
+    `snapshot` is the indicator-state snapshot at entry time, attached to the
+    in-memory position so that the post-mortem at close time has the original
+    market context to reason from.
+    """
     global _pos
     side = signal["side"]
     lev = signal["leverage"]
@@ -206,6 +218,7 @@ def _try_open(equity: float, signal: dict):
         "tp_margin": tp_margin,
         "strategy": "MR" if is_mr else "D",
         "opened_ts": time.time(),
+        "entry_snapshot": snapshot or {},
     })
     st.save(_pos)
 
@@ -304,7 +317,7 @@ def _reconcile_with_exchange(api_pos):
         pnl_pct = (entry - last_price) / entry
     pnl_dollar = (size * entry) * pnl_pct
     emoji = "✅" if pnl_dollar >= 0 else "❌"
-    st.log_trade({
+    rec = {
         "ts": time.time(),
         "symbol": cfg.SYMBOL, "side": side,
         "entry": entry, "exit": last_price,
@@ -313,11 +326,14 @@ def _reconcile_with_exchange(api_pos):
         "pnl": round(pnl_dollar, 4), "pnl_pct": round(pnl_pct, 6),
         "reason": "server_stop", "tier": _pos.get("tier", "?"),
         "strategy": _pos.get("strategy", "D"),
-    })
+    }
+    st.log_trade(rec)
+    entry_snapshot = _pos.get("entry_snapshot") or {}
     if pnl_dollar < 0:
         _last_loss_ts = time.time()
     _pos.clear()
     st.save(None)
+    ai.analyze_trade_async(rec, entry_snapshot)
     new_eq = ex.get_balance()
     today_d, _ = _today_pnl(new_eq)
     tg.send(
@@ -349,6 +365,22 @@ def _setup_handlers():
         d15, d1h, d4h = strat.compute_indicators(df15, df1h, df4h)
         tg.send(_build_score_text(d15, d1h, d4h))
 
+    def ai_cmd():
+        """Force a fresh regime classification and post it."""
+        if not cfg.AI_ENABLED or not cfg.GEMINI_API_KEY:
+            tg.send("AI 비활성 (GEMINI_API_KEY + AI_ENABLED=true 필요)")
+            return
+        df15 = ex.get_ohlcv_cached(cfg.SYMBOL, "15", 200)
+        df1h = ex.get_ohlcv_cached(cfg.SYMBOL, "60", 200)
+        df4h = ex.get_ohlcv_cached(cfg.SYMBOL, "240", 200)
+        if any(len(d) < 60 for d in [df15, df1h, df4h]):
+            tg.send("데이터 부족")
+            return
+        d15, d1h, d4h = strat.compute_indicators(df15, df1h, df4h)
+        snap = ai.market_snapshot(d15, d1h, d4h)
+        tg.send("🧠 레짐 분석 중...")
+        ai.detect_regime_async(snap, send_telegram=True)
+
     def halt():
         global _safety
         if not _safety:
@@ -373,6 +405,7 @@ def _setup_handlers():
     return {
         "/status":  status,
         "/score":   score_cmd,
+        "/ai":      ai_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
@@ -381,6 +414,19 @@ def _setup_handlers():
 def _heartbeat(equity: float):
     print(f"[{_now_str()}] 💓 loop #{_loop_count} | eq=${equity:.2f} | pos={'Y' if _pos else 'N'}",
           flush=True)
+
+
+def _maybe_run_regime(df15, df1h, df4h):
+    """Periodic AI regime classification. Posts to Telegram on each refresh
+    so user gets a market-context message alongside hourly stats."""
+    global _last_regime_call_ts
+    if not cfg.AI_ENABLED or not cfg.GEMINI_API_KEY:
+        return
+    if time.time() - _last_regime_call_ts < cfg.AI_REGIME_INTERVAL_SEC:
+        return
+    _last_regime_call_ts = time.time()
+    snap = ai.market_snapshot(df15, df1h, df4h)
+    ai.detect_regime_async(snap, send_telegram=True)
 
 
 def _maybe_hourly_report(equity: float, df15, df1h, df4h):
@@ -427,6 +473,12 @@ def _maybe_hourly_report(equity: float, df15, df1h, df4h):
         f"24h: {w24}W/{l24}L ({wr24:.0f}%)  ${p24:+.2f}\n"
         f"7일: {w7}W/{l7}L ({wr7:.0f}%)  ${p7:+.2f}"
     )
+    reg = ai.get_last_regime()
+    if reg:
+        msg += (
+            f"\n🧠 레짐: {reg.get('regime', '?')} "
+            f"({float(reg.get('confidence', 0))*100:.0f}%) → {reg.get('suggested', '?')}"
+        )
     tg.send(msg)
 
 
@@ -496,8 +548,9 @@ def main():
         f"━ 안전 ━\n"
         f"자동 정지 OFF (수동 /halt 가능)\n"
         f"서버사이드 -2% SL 모든 진입에 부착\n"
-        f"명령: /status /score /halt /resume\n"
-        f"⏰ KST 정각마다 리포트"
+        f"명령: /status /score /ai /halt /resume\n"
+        f"⏰ KST 정각마다 리포트\n"
+        f"🧠 AI: {'ON (' + cfg.AI_MODEL + ')' if (cfg.AI_ENABLED and cfg.GEMINI_API_KEY) else 'OFF'}"
     )
     print(f"[v7 boot] startup complete — entering main loop", flush=True)
 
@@ -542,15 +595,16 @@ def main():
             else:
                 # cooldown after a recent stop
                 if time.time() - _last_loss_ts > cfg.COOLDOWN_BARS_LOSS * 15 * 60:
+                    snap = ai.market_snapshot(df15, df1h, df4h)
                     # D first (high-conviction trend setups)
                     sig = strat.evaluate_entry(df15, df1h, df4h)
                     if sig:
-                        _try_open(equity, sig)
+                        _try_open(equity, sig, snap)
                     else:
                         # MR fallback (mean reversion in chop)
                         mr_sig = strat.evaluate_mr_entry(df15, df4h)
                         if mr_sig:
-                            _try_open(equity, mr_sig)
+                            _try_open(equity, mr_sig, snap)
 
             # 5) Periodic heartbeat (stdout, not Telegram)
             if _loop_count % 10 == 1:
@@ -558,6 +612,9 @@ def main():
 
             # 6) Hourly Telegram report
             _maybe_hourly_report(equity, df15, df1h, df4h)
+
+            # 7) Periodic AI regime classification (best-effort, async)
+            _maybe_run_regime(df15, df1h, df4h)
 
             time.sleep(cfg.LOOP_SEC)
 
