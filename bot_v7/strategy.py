@@ -40,6 +40,25 @@ def _tp_margin_for_tier(tier: str):
     }.get(tier)
 
 
+def _margin_pct_for_tier(tier: str) -> float:
+    """v9 per-tier differential margin (Option C aggressive)."""
+    return {
+        "micro": cfg.MARGIN_PCT_MICRO,
+        "probe": cfg.MARGIN_PCT_PROBE,
+        "base":  cfg.MARGIN_PCT_BASE,
+        "mid":   cfg.MARGIN_PCT_MID,
+        "high":  cfg.MARGIN_PCT_HIGH,
+        "mr":    cfg.MARGIN_PCT_MR,
+    }.get(tier, cfg.MARGIN_PCT_BASE)
+
+
+def _trail_mult_for_tier(tier: str) -> float:
+    """v9 per-tier ATR trail multiplier — wider for high-conviction tiers."""
+    if tier == "high": return cfg.TRAIL_ATR_HIGH
+    if tier == "mid":  return cfg.TRAIL_ATR_MID
+    return cfg.TRAIL_ATR_DEFAULT
+
+
 def compute_indicators(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
                        df_4h: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Add all required columns. Caller passes raw OHLCV from exchange."""
@@ -184,18 +203,23 @@ def evaluate_position_management(pos: dict, atr_15m: float, current_price: float
         if not pos.get("scale_done") and tp_margin is not None and margin_pct >= tp_margin:
             return {"action": "scale_out", "ratio": 0.5}
         if pos.get("scale_done"):
-            return _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low)
+            trail_mult = _trail_mult_for_tier(tier)
+            return _be_then_trail(pos, side, entry, cur_stop, R, atr_15m,
+                                  last_high, last_low, trail_mult)
         return None
 
     # ---- High tier: BE @ +1R then chandelier (no fixed TP) ----
     if tier == "high":
-        return _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low)
+        trail_mult = _trail_mult_for_tier(tier)
+        return _be_then_trail(pos, side, entry, cur_stop, R, atr_15m,
+                              last_high, last_low, trail_mult)
 
     return None
 
 
-def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low):
-    """Shared BE + chandelier helper for mid (post-partial) and high tiers."""
+def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low,
+                   trail_mult: float = 1.5):
+    """v9: trail_mult is tier-aware (mid 2.5, high 3.0)."""
     if atr_15m <= 0:
         return None
     if side == "Buy":
@@ -205,31 +229,33 @@ def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low):
                 pos["be_done"] = True
                 return {"action": "modify_stop", "stop": new_stop}
         if pos.get("be_done"):
-            cand = last_high - ATR_TRAIL_MULT * atr_15m
+            cand = last_high - trail_mult * atr_15m
             if cand > cur_stop:
                 return {"action": "modify_stop", "stop": cand}
-    else:  # Sell
+    else:
         if not pos.get("be_done") and (entry - last_low) >= R:
             new_stop = entry
             if new_stop < cur_stop:
                 pos["be_done"] = True
                 return {"action": "modify_stop", "stop": new_stop}
         if pos.get("be_done"):
-            cand = last_low + ATR_TRAIL_MULT * atr_15m
+            cand = last_low + trail_mult * atr_15m
             if cand < cur_stop:
                 return {"action": "modify_stop", "stop": cand}
     return None
 
 
-def calc_qty(equity: float, leverage: float, price: float, symbol: str) -> float:
-    """Margin-based sizing: notional = equity × MARGIN_PCT × leverage."""
+def calc_qty(equity: float, leverage: float, price: float, symbol: str,
+             tier: str = "base") -> float:
+    """v9 sizing: notional = equity × margin_pct(tier) × leverage."""
     if equity <= 0 or price <= 0 or leverage <= 0:
         return 0.0
-    margin = equity * cfg.MARGIN_PCT * cfg.CAPITAL_FRACTION
+    margin_pct = _margin_pct_for_tier(tier)
+    margin = equity * margin_pct * cfg.CAPITAL_FRACTION
     notional = margin * leverage
     qty = notional / price
     decimals = cfg.QTY_DECIMALS.get(symbol, 2)
     qty = round(qty, decimals)
-    if qty * price < 5.0:  # Bybit min order $5
+    if qty * price < 5.0:
         return 0.0
     return qty
