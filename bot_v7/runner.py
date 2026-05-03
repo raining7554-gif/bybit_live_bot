@@ -1,5 +1,7 @@
 """v7 main loop. Wires strategy + exchange + safety + notifier together."""
 from __future__ import annotations
+import json
+import os
 import sys
 import time
 import traceback
@@ -29,19 +31,54 @@ def _now_str() -> str:
     return datetime.now(KST).strftime("%H:%M:%S KST")
 
 
+def _compute_stats(window_sec: int) -> tuple[int, int, float]:
+    """Read trade log, return (wins, losses, total_pnl) for trades exited
+    within the last window_sec seconds. Used for hourly report.
+    """
+    cutoff = time.time() - window_sec
+    wins, losses, total_pnl = 0, 0, 0.0
+    try:
+        if not os.path.exists(cfg.TRADE_LOG_PATH):
+            return wins, losses, total_pnl
+        with open(cfg.TRADE_LOG_PATH) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                    if rec.get("ts", 0) < cutoff:
+                        continue
+                    pnl = float(rec.get("pnl", 0))
+                    total_pnl += pnl
+                    if pnl >= 0:
+                        wins += 1
+                    else:
+                        losses += 1
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[stats err] {e}", flush=True)
+    return wins, losses, total_pnl
+
+
+def _today_pnl(equity: float) -> tuple[float, float]:
+    """Returns (today_pnl_dollar, today_pnl_pct) using safety day_anchor."""
+    if not _safety or _safety.day_anchor_equity <= 0:
+        return 0.0, 0.0
+    diff = equity - _safety.day_anchor_equity
+    pct = diff / _safety.day_anchor_equity
+    return diff, pct
+
+
 def _build_status_text(equity: float) -> str:
+    today_d, today_pct = _today_pnl(equity)
     lines = [
-        f"📊 v7 상태 ({_now_str()})",
-        f"심볼: {cfg.SYMBOL} | testnet: {cfg.TESTNET}",
-        f"잔고: ${equity:,.2f}",
-        f"증거금/거래: {cfg.MARGIN_PCT*100:.0f}% | 자본활용: {cfg.CAPITAL_FRACTION*100:.0f}%",
+        f"📊 v9 상태 ({_now_str()})",
+        f"잔고: ${equity:,.2f} (오늘 ${today_d:+.2f} / {today_pct*100:+.2f}%)",
     ]
     if _pos:
         side_kr = "롱" if _pos.get("side") == "Buy" else "숏"
-        lines.append(
-            f"포지션: {side_kr} entry=${_pos['entry']:.2f} "
-            f"stop=${_pos['current_stop']:.2f} lev={_pos['leverage']:.1f}x"
-        )
+        lev = _pos.get("leverage", 0)
+        strategy_name = _pos.get("strategy", "D")
+        lines.append(f"포지션: {strategy_name} {side_kr} ({lev:.0f}x)")
     else:
         lines.append("포지션: 없음")
     if _safety:
@@ -76,14 +113,21 @@ def _build_score_text(df_15m, df_1h, df_4h) -> str:
     )
 
 
+_REASON_KR = {
+    "fixed_tp": "TP", "tp": "TP", "scale_out": "TP1",
+    "trail": "트레일", "sl": "손절", "mr_tp": "MR_TP",
+    "server_stop": "서버손절", "flash": "급락", "manual": "수동",
+}
+
+
 def _close_current(reason: str, fill_price: float, equity_before: float):
-    """Close active position (uses _pos)."""
+    """Close active position (uses _pos). Simplified message."""
     global _pos, _last_loss_ts
     if not _pos:
         return
     ok = ex.close_position_market(cfg.SYMBOL, _pos["side"], _pos["size"])
     if not ok:
-        tg.send(f"⚠️ {cfg.SYMBOL} 청산 실패 (reason={reason}) — 다음 루프 재시도")
+        tg.send(f"⚠️ 청산 실패 ({reason}) — 다음 루프 재시도")
         return
     side = _pos["side"]
     entry = _pos["entry"]
@@ -91,13 +135,7 @@ def _close_current(reason: str, fill_price: float, equity_before: float):
     notional = _pos["size"] * entry
     pnl_dollar = notional * pnl_pct
     emoji = "✅" if pnl_dollar >= 0 else "❌"
-    tg.send(
-        f"{emoji} {cfg.SYMBOL} 청산 ({reason})\n"
-        f"방향: {'롱' if side=='Buy' else '숏'}\n"
-        f"진입→청산: ${entry:.2f} → ${fill_price:.2f}\n"
-        f"PnL: ${pnl_dollar:+.2f} ({pnl_pct*100:+.2f}%)\n"
-        f"점수: {_pos.get('score', '?')} | 레버리지: {_pos.get('leverage', 0):.1f}x"
-    )
+
     st.log_trade({
         "ts": time.time(),
         "symbol": cfg.SYMBOL, "side": side,
@@ -105,12 +143,22 @@ def _close_current(reason: str, fill_price: float, equity_before: float):
         "size": _pos["size"], "leverage": _pos.get("leverage", 0),
         "score": _pos.get("score", 0),
         "pnl": round(pnl_dollar, 4), "pnl_pct": round(pnl_pct, 6),
-        "reason": reason,
+        "reason": reason, "tier": _pos.get("tier", "?"),
+        "strategy": _pos.get("strategy", "D"),
     })
     if pnl_dollar < 0:
         _last_loss_ts = time.time()
     _pos.clear()
     st.save(None)
+
+    # Refresh today's PnL after this trade settles into balance
+    new_eq = ex.get_balance() or equity_before + pnl_dollar
+    today_d, _ = _today_pnl(new_eq)
+    label = _REASON_KR.get(reason, reason)
+    tg.send(
+        f"{emoji} {label} 청산 ${pnl_dollar:+.2f} ({pnl_pct*100:+.2f}%)\n"
+        f"잔고: ${new_eq:,.2f} (오늘 ${today_d:+.2f})"
+    )
 
 
 def _try_open(equity: float, signal: dict):
@@ -127,7 +175,9 @@ def _try_open(equity: float, signal: dict):
         tg.send(f"⚠️ 레버리지 설정 실패 → 진입 보류")
         return
 
-    qty = strat.calc_qty(equity, lev, entry_price, cfg.SYMBOL)
+    # v9: tier-aware sizing (per-tier margin %)
+    sizing_tier = "mr" if is_mr else signal.get("tier", "base")
+    qty = strat.calc_qty(equity, lev, entry_price, cfg.SYMBOL, tier=sizing_tier)
     if qty <= 0:
         return
     disaster_sl = entry_price * (1 - cfg.DISASTER_SL_PCT) if side == "Buy" \
@@ -159,28 +209,13 @@ def _try_open(equity: float, signal: dict):
     })
     st.save(_pos)
 
+    side_kr = "롱" if side == "Buy" else "숏"
     if is_mr:
-        tg.send(
-            f"〰️ {cfg.SYMBOL} MR 진입 ({'롱' if side=='Buy' else '숏'})\n"
-            f"전략: 평균회귀 (BB 극단 + 횡보)\n"
-            f"가격: ${entry_price:.2f} | qty: {qty} | lev {lev:.1f}x\n"
-            f"손절: ${final_stop:.2f} ({(final_stop/entry_price-1)*100:+.2f}%)\n"
-            f"익절: ${tp_price:.2f} (BB 중앙선)\n"
-            f"잔고: ${equity:,.2f}"
-        )
+        tg.send(f"〰️ MR {side_kr} 진입 ({lev:.0f}x)\n"
+                f"잔고: ${equity:,.2f}  진입가: ${entry_price:,.2f}")
     else:
-        tier_kr = {"micro": "마이크로", "probe": "프로브",
-                   "base": "베이스", "mid": "미드", "high": "하이"}.get(tier, tier)
-        tp_str = (f"+{tp_margin*100:.0f}% 마진" if tp_margin is not None
-                  else "트레일만 (고정 TP X)")
-        tg.send(
-            f"📈 {cfg.SYMBOL} D 진입 ({'롱' if side=='Buy' else '숏'})\n"
-            f"점수: {signal['score']:.1f} → tier {tier_kr} (lev {lev:.1f}x)\n"
-            f"가격: ${entry_price:.2f} | qty: {qty}\n"
-            f"손절: ${final_stop:.2f} ({(final_stop/entry_price-1)*100:+.2f}%)\n"
-            f"익절: {tp_str}\n"
-            f"잔고: ${equity:,.2f} | 증거금: ${equity*cfg.MARGIN_PCT*cfg.CAPITAL_FRACTION:,.2f}"
-        )
+        tg.send(f"📈 D {side_kr} 진입 ({lev:.0f}x)\n"
+                f"잔고: ${equity:,.2f}  진입가: ${entry_price:,.2f}")
 
 
 def _manage(df_15m: pd.DataFrame):
@@ -225,10 +260,11 @@ def _manage(df_15m: pd.DataFrame):
             _pos["size"] -= partial_qty
             _pos["scale_done"] = True
             st.save(_pos)
+            new_eq = ex.get_balance()
+            today_d, _ = _today_pnl(new_eq)
             tg.send(
-                f"🟦 {cfg.SYMBOL} TP1 부분익절 50%\n"
-                f"점수 tier {_pos.get('tier','?')} | 남은 수량 {_pos['size']:.4f}\n"
-                f"이제 BE → 챈들리어 트레일"
+                f"🟦 TP1 부분익절 50%\n"
+                f"잔고: ${new_eq:,.2f} (오늘 ${today_d:+.2f})"
             )
         return
 
@@ -268,13 +304,6 @@ def _reconcile_with_exchange(api_pos):
         pnl_pct = (entry - last_price) / entry
     pnl_dollar = (size * entry) * pnl_pct
     emoji = "✅" if pnl_dollar >= 0 else "❌"
-    tg.send(
-        f"{emoji} {cfg.SYMBOL} 외부 청산 감지 (server_stop)\n"
-        f"방향: {'롱' if side == 'Buy' else '숏'}\n"
-        f"진입→마지막가: ${entry:.2f} → ${last_price:.2f}\n"
-        f"PnL: ${pnl_dollar:+.2f} ({pnl_pct*100:+.2f}%)\n"
-        f"점수: {_pos.get('score', '?')} | 레버리지: {_pos.get('leverage', 0):.1f}x"
-    )
     st.log_trade({
         "ts": time.time(),
         "symbol": cfg.SYMBOL, "side": side,
@@ -282,12 +311,19 @@ def _reconcile_with_exchange(api_pos):
         "size": size, "leverage": _pos.get("leverage", 0),
         "score": _pos.get("score", 0),
         "pnl": round(pnl_dollar, 4), "pnl_pct": round(pnl_pct, 6),
-        "reason": "server_stop",
+        "reason": "server_stop", "tier": _pos.get("tier", "?"),
+        "strategy": _pos.get("strategy", "D"),
     })
     if pnl_dollar < 0:
         _last_loss_ts = time.time()
     _pos.clear()
     st.save(None)
+    new_eq = ex.get_balance()
+    today_d, _ = _today_pnl(new_eq)
+    tg.send(
+        f"{emoji} 서버손절 청산 ${pnl_dollar:+.2f} ({pnl_pct*100:+.2f}%)\n"
+        f"잔고: ${new_eq:,.2f} (오늘 ${today_d:+.2f})"
+    )
 
 
 def _restore_from_state():
@@ -348,61 +384,48 @@ def _heartbeat(equity: float):
 
 
 def _maybe_hourly_report(equity: float, df15, df1h, df4h):
-    """Send a status report on every KST hour mark (XX:00 ~ XX:05 window).
-
-    Fires at most once per KST hour. Window is 5 minutes wide so a 30s
-    main loop reliably catches it without missing on slow ticks.
+    """v9 simplified KST hourly report.
+    Shows: balance, today PnL, position brief, 24h W/L/PnL, 7d W/L/PnL.
     """
     global _last_report_kst_hour
     now_kst = datetime.now(KST)
     if now_kst.minute >= 5:
-        return                          # outside the top-of-hour window
+        return
     if now_kst.hour == _last_report_kst_hour:
-        return                          # already reported this hour
+        return
     _last_report_kst_hour = now_kst.hour
 
-    from backtest.strategies.strategy_d import _signal_strength
-    from backtest.strategies.strategy_mr import _check_signal as mr_check
-    try:
-        score, direction = _signal_strength(df15.iloc[-1], df1h.iloc[-1], df4h.iloc[-1])
-        lev = strat._leverage_for_score(score)
-    except Exception:
-        score, direction, lev = 0.0, "n/a", 0.0
-    try:
-        mr_side, mr_reason = mr_check(df15.iloc[-1], df4h.iloc[-1])
-    except Exception:
-        mr_side, mr_reason = "none", "err"
+    today_d, today_pct = _today_pnl(equity)
 
-    px = float(df15.iloc[-1].close)
-
-    # Daily PnL anchor (from safety state)
-    day_dd = ""
-    if _safety and _safety.day_anchor_equity > 0:
-        d = (equity - _safety.day_anchor_equity) / _safety.day_anchor_equity
-        day_dd = f"오늘 PnL: {d*100:+.2f}% (한도 -3%)"
-
-    pos_line = "포지션: 없음"
+    # Position brief (no entry price / no score / no market data)
     if _pos:
         side_kr = "롱" if _pos.get("side") == "Buy" else "숏"
+        strategy_name = _pos.get("strategy", "D")
+        lev = _pos.get("leverage", 0)
         entry = _pos.get("entry", 0)
-        cur_pnl = (px - entry) / entry if _pos.get("side") == "Buy" else (entry - px) / entry
-        notional = _pos.get("size", 0) * entry
-        pnl_dollar = notional * cur_pnl
-        pos_line = (
-            f"포지션: {_pos.get('strategy','?')} {side_kr} "
-            f"entry=${entry:.2f} now=${px:.2f}\n"
-            f"  PnL: ${pnl_dollar:+.2f} ({cur_pnl*100:+.2f}%) "
-            f"lev={_pos.get('leverage',0):.1f}x"
-        )
+        size = _pos.get("size", 0)
+        cur_px = float(df15.iloc[-1].close) if len(df15) > 0 else entry
+        cur_pnl_pct = (cur_px - entry) / entry if _pos.get("side") == "Buy" else (entry - cur_px) / entry
+        cur_pnl_d = (size * entry) * cur_pnl_pct
+        pos_line = (f"포지션: {strategy_name} {side_kr} ({lev:.0f}x) "
+                    f"${cur_pnl_d:+.2f} ({cur_pnl_pct*100:+.2f}%)")
+    else:
+        pos_line = "포지션: 없음"
+
+    w24, l24, p24 = _compute_stats(86400)
+    w7,  l7,  p7  = _compute_stats(604800)
+    n24 = w24 + l24
+    n7  = w7  + l7
+    wr24 = (w24 / n24 * 100) if n24 > 0 else 0
+    wr7  = (w7  / n7  * 100) if n7  > 0 else 0
 
     msg = (
-        f"⏰ {now_kst.strftime('%m/%d %H:00 KST')} 리포트\n"
-        f"잔고: ${equity:,.2f}\n"
-        f"가격: ${px:,.2f}\n"
-        f"{day_dd}\n"
-        f"D 점수: {score:.1f} (방향: {direction}, 매핑 lev: {lev:.1f}x)\n"
-        f"MR 신호: {mr_side} ({mr_reason})\n"
-        f"{pos_line}"
+        f"⏰ {now_kst.strftime('%H:%M')} KST\n"
+        f"잔고: ${equity:,.2f} (오늘 ${today_d:+.2f} / {today_pct*100:+.2f}%)\n"
+        f"{pos_line}\n"
+        f"─────────\n"
+        f"24h: {w24}W/{l24}L ({wr24:.0f}%)  ${p24:+.2f}\n"
+        f"7일: {w7}W/{l7}L ({wr7:.0f}%)  ${p7:+.2f}"
     )
     tg.send(msg)
 
@@ -459,26 +482,22 @@ def main():
     )
     handlers = _setup_handlers()
     tg.send(
-        f"🚀 v7 시작 (3tier 공격형)\n"
+        f"🚀 v9 시작 — 차등증거금 + 비대칭 익절\n"
         f"봇: {bot_label}\n"
-        f"심볼: {cfg.SYMBOL} | testnet: {cfg.TESTNET}\n"
-        f"잔고: ${eq0:,.2f} | 가격: ${px0:,.2f}\n"
-        f"━ D 전략 (v8 공격형 + 비대칭 익절) ━\n"
-        f"증거금 {cfg.MARGIN_PCT*100:.0f}% × 레버리지 3/5/10/15/20x\n"
-        f"  55-59 → 3x  / TP +3% 마진\n"
-        f"  60-69 → 5x  / TP +5% 마진\n"
-        f"  70-79 → 10x / TP +10% 마진\n"
-        f"  80-89 → 15x / TP1 +10% 부분익절 → 트레일\n"
-        f"  90+   → 20x / 트레일만 (끝까지)\n"
-        f"  4H bias EMA50 (단기 추세) + RSI 체크 X\n"
-        f"━ MR 전략 (평균회귀) ━\n"
-        f"BB 0.15/0.85 + ADX<30 + RSI 35/65\n"
-        f"고정 lev 5.0x, TP=BB 중간선\n"
-        f"━ 안전 (사용자 모니터링 가정) ━\n"
-        f"일{safety.DAILY_LOSS_LIMIT_PCT*100:.0f}% / 주{safety.WEEKLY_LOSS_LIMIT_PCT*100:.0f}% / 월{safety.MONTHLY_LOSS_LIMIT_PCT*100:.0f}% 자동정지\n"
+        f"심볼: {cfg.SYMBOL} | 잔고: ${eq0:,.2f}\n"
+        f"━ D 전략 (점수→tier별 차등) ━\n"
+        f"  55-59 → 3x  / 증거금 30% / TP +2%\n"
+        f"  60-69 → 5x  / 증거금 40% / TP +3%\n"
+        f"  70-79 → 10x / 증거금 50% / TP +6%\n"
+        f"  80-89 → 15x / 증거금 65% / TP1 +10% → 2.5×ATR 트레일\n"
+        f"  90+   → 20x / 증거금 80% / 3.0×ATR 트레일 (끝까지)\n"
+        f"━ MR (평균회귀) ━\n"
+        f"  5x / 증거금 50% / BB 중간선 TP\n"
+        f"━ 안전 ━\n"
+        f"자동 정지 OFF (수동 /halt 가능)\n"
         f"서버사이드 -2% SL 모든 진입에 부착\n"
         f"명령: /status /score /halt /resume\n"
-        f"⏰ KST 정각마다 자동 리포트"
+        f"⏰ KST 정각마다 리포트"
     )
     print(f"[v7 boot] startup complete — entering main loop", flush=True)
 

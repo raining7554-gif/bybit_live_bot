@@ -18,14 +18,22 @@ SYMBOL     = os.environ.get("SYMBOL", "BTCUSDT")
 LOOP_SEC   = int(os.environ.get("LOOP_SEC", "30"))
 POSITION_MODE = os.environ.get("POSITION_MODE", "one_way")
 
-# ─── Capital / sizing (user-configurable) ──────────────────────
-# Margin = MARGIN_PCT × equity (per trade). Notional = margin × dynamic_leverage.
+# ─── Capital / sizing (v9: per-tier differential margin) ──────
+# Each D-tier gets its own margin allocation (Option C aggressive).
+# Notional per trade = margin% × leverage × equity.
+MARGIN_PCT_MICRO = 0.30   # 3x  → notional 90%   equity
+MARGIN_PCT_PROBE = 0.40   # 5x  → notional 200%
+MARGIN_PCT_BASE  = 0.50   # 10x → notional 500%
+MARGIN_PCT_MID   = 0.65   # 15x → notional 975%
+MARGIN_PCT_HIGH  = 0.80   # 20x → notional 1600%
+MARGIN_PCT_MR    = 0.50   # MR 5x → notional 250% (unchanged)
+# Legacy single-margin used only as fallback / display
 MARGIN_PCT       = float(os.environ.get("MARGIN_PCT", "0.50"))
 # Max equity actually used by the bot (rest sits idle as buffer).
 CAPITAL_FRACTION = float(os.environ.get("CAPITAL_FRACTION", "1.00"))
 
-# ─── Strategy D v8 (5-tier aggressive + asymmetric exit) ──
-ENTRY_MIN_SCORE   = 55.0   # v8: 60 → 55 (new micro tier)
+# ─── Strategy D v9 (5-tier aggressive + per-tier exit + per-tier margin) ──
+ENTRY_MIN_SCORE   = 55.0
 SCORE_TIER_MICRO  = 60.0   # 55..59 → 3x
 SCORE_TIER_PROBE  = 70.0   # 60..69 → 5x
 SCORE_TIER_BASE   = 80.0   # 70..79 → 10x
@@ -36,12 +44,19 @@ LEV_TIER_BASE     = 10.0
 LEV_TIER_MID      = 15.0
 LEV_TIER_HIGH     = 20.0
 
-# Per-tier exit policy (margin-% gain target; None = trail-only)
-TP_MARGIN_MICRO   = 0.03   # micro:  +3%  margin → close
-TP_MARGIN_PROBE   = 0.05   # probe:  +5%  margin → close
-TP_MARGIN_BASE    = 0.10   # base:   +10% margin → close
-TP1_MARGIN_MID    = 0.10   # mid:    +10% margin → 50% partial → BE+trail rest
-TP_MARGIN_HIGH    = None   # high:   no fixed TP — BE@+1R then chandelier trail
+# Per-tier exit policy v9 — option A (more extreme on both ends):
+#   low tiers cash out faster (smaller TP)
+#   high tiers trail wider (let trends run)
+TP_MARGIN_MICRO   = 0.02   # micro: +2% margin → close (was +3%)
+TP_MARGIN_PROBE   = 0.03   # probe: +3% margin → close (was +5%)
+TP_MARGIN_BASE    = 0.06   # base:  +6% margin → close (was +10%)
+TP1_MARGIN_MID    = 0.10   # mid:   TP1 +10% partial 50% → BE+trail rest
+TP_MARGIN_HIGH    = None   # high:  no fixed TP — BE+trail only
+
+# Per-tier ATR trail multiplier (mid + high are wider for trend riding)
+TRAIL_ATR_DEFAULT = 1.5
+TRAIL_ATR_MID     = 2.5
+TRAIL_ATR_HIGH    = 3.0
 
 # ─── Stop / trail ──────────────────────────────────────────────
 ATR_STOP_MULT  = 1.5

@@ -46,9 +46,17 @@ import numpy as np
 import pandas as pd
 
 ATR_STOP_MULT = 1.5
-ATR_TRAIL_MULT = 1.5
+ATR_TRAIL_MULT = 1.5      # default trail (used by base/probe/micro if any)
+ATR_TRAIL_MID  = 2.5      # v9: mid tier wider trail
+ATR_TRAIL_HIGH = 3.0      # v9: high tier widest trail
 COOLDOWN_BARS_LOSS = 6
 TP_SCALE_R = 2.0
+
+
+def _trail_mult(tier: str) -> float:
+    if tier == "high": return ATR_TRAIL_HIGH
+    if tier == "mid":  return ATR_TRAIL_MID
+    return ATR_TRAIL_MULT
 
 
 def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
@@ -193,19 +201,19 @@ def make_strategy():
                     return {"action": "close", "reason": "fixed_tp"}
                 return None
 
-            # Mid tier: TP1 partial 50% then BE+trail rest
+            # Mid tier: TP1 partial 50% then BE+wider trail rest
             if tier == "mid":
                 if not pos.extras.get("scale_done") and tp_margin is not None and margin_pct >= tp_margin:
                     pos.extras["scale_done"] = True
                     return {"action": "scale_out", "ratio": 0.5}
-                # After partial: BE then chandelier trail
                 if pos.extras.get("scale_done"):
+                    tmult = _trail_mult(tier)
                     if pos.side == "long":
                         if not pos.extras.get("be_done") and (high - pos.entry) >= R:
                             pos.extras["be_done"] = True
                             return {"action": "modify_stop", "stop": pos.entry}
                         if pos.extras.get("be_done") and atr15 > 0:
-                            cand = high - ATR_TRAIL_MULT * atr15
+                            cand = high - tmult * atr15
                             if cand > pos.stop:
                                 return {"action": "modify_stop", "stop": cand}
                     else:
@@ -213,19 +221,20 @@ def make_strategy():
                             pos.extras["be_done"] = True
                             return {"action": "modify_stop", "stop": pos.entry}
                         if pos.extras.get("be_done") and atr15 > 0:
-                            cand = low + ATR_TRAIL_MULT * atr15
+                            cand = low + tmult * atr15
                             if cand < pos.stop:
                                 return {"action": "modify_stop", "stop": cand}
                 return None
 
-            # High tier: BE @ +1R then chandelier trail (no fixed TP)
+            # High tier: BE @ +1R then widest trail (3.0×ATR)
             if tier == "high":
+                tmult = _trail_mult(tier)
                 if pos.side == "long":
                     if not pos.extras.get("be_done") and (high - pos.entry) >= R:
                         pos.extras["be_done"] = True
                         return {"action": "modify_stop", "stop": pos.entry}
                     if pos.extras.get("be_done") and atr15 > 0:
-                        cand = high - ATR_TRAIL_MULT * atr15
+                        cand = high - tmult * atr15
                         if cand > pos.stop:
                             return {"action": "modify_stop", "stop": cand}
                 else:
@@ -233,7 +242,7 @@ def make_strategy():
                         pos.extras["be_done"] = True
                         return {"action": "modify_stop", "stop": pos.entry}
                     if pos.extras.get("be_done") and atr15 > 0:
-                        cand = low + ATR_TRAIL_MULT * atr15
+                        cand = low + tmult * atr15
                         if cand < pos.stop:
                             return {"action": "modify_stop", "stop": cand}
             return None
@@ -283,10 +292,10 @@ def make_strategy():
         notional = min(notional, max_notional)
         size_pct_eff = notional / (equity * cfg.max_leverage) if cfg.max_leverage > 0 else 0
 
-        # v8: per-tier exit policy
+        # v9: per-tier exit policy (more extreme — low cuts faster, high trails wider)
         tier = tier_for_score(score)
         tp_margin_map = {
-            "micro": 0.03, "probe": 0.05, "base": 0.10,
+            "micro": 0.02, "probe": 0.03, "base": 0.06,
             "mid":   0.10, "high":  None,
         }
         tp_margin = tp_margin_map.get(tier)
