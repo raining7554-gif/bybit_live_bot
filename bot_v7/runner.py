@@ -24,6 +24,7 @@ _safety = None             # SafetyState
 _loop_count = 0
 _last_report_kst_hour: int = -1  # KST hour we last sent the hourly report for
 _last_regime_call_ts: float = 0.0  # last AI regime detection call
+_last_weekly_review_kst: str = ""   # YYYY-MM-DD of last weekly review run
 
 
 KST = timezone(timedelta(hours=9))
@@ -402,10 +403,24 @@ def _setup_handlers():
         safety.save(_safety)
         tg.send("✅ 모든 정지 해제 (책임은 사용자)")
 
+    def review_cmd():
+        tg.send("📊 주간 회고 분석 중...")
+        ai.weekly_review_async(verbose_errors=True)
+
+    def propose_cmd():
+        tg.send("⚙️ 파라미터 제안 분석 중...")
+        ai.propose_async(verbose_errors=True)
+
+    def lessons_cmd():
+        tg.send(ai.get_recent_lessons_text(limit=8))
+
     return {
         "/status":  status,
         "/score":   score_cmd,
         "/ai":      ai_cmd,
+        "/review":  review_cmd,
+        "/propose": propose_cmd,
+        "/lessons": lessons_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
@@ -427,6 +442,23 @@ def _maybe_run_regime(df15, df1h, df4h):
     _last_regime_call_ts = time.time()
     snap = ai.market_snapshot(df15, df1h, df4h)
     ai.detect_regime_async(snap, send_telegram=True)
+
+
+def _maybe_run_weekly_review():
+    """일요일 00:05~00:15 KST 사이 1회 주간 회고 자동 실행."""
+    global _last_weekly_review_kst
+    if not cfg.AI_ENABLED or not cfg.GEMINI_API_KEY:
+        return
+    now_kst = datetime.now(KST)
+    # 일요일(weekday=6), 자정~10분 사이
+    if now_kst.weekday() != 6 or now_kst.hour != 0 or now_kst.minute >= 15:
+        return
+    today = now_kst.strftime("%Y-%m-%d")
+    if today == _last_weekly_review_kst:
+        return
+    _last_weekly_review_kst = today
+    print(f"[{_now_str()}] 📊 자동 주간 회고 트리거", flush=True)
+    ai.weekly_review_async(verbose_errors=False)
 
 
 def _maybe_hourly_report(equity: float, df15, df1h, df4h):
@@ -548,7 +580,7 @@ def main():
         f"━ 안전 ━\n"
         f"자동 정지 OFF (수동 /halt 가능)\n"
         f"서버사이드 -2% SL 모든 진입에 부착\n"
-        f"명령: /status /score /ai /halt /resume\n"
+        f"명령: /status /score /ai /review /propose /lessons /halt /resume\n"
         f"⏰ KST 정각마다 리포트\n"
         f"🧠 AI: {'ON (' + cfg.AI_MODEL + ')' if (cfg.AI_ENABLED and cfg.GEMINI_API_KEY) else 'OFF'}"
     )
@@ -615,6 +647,9 @@ def main():
 
             # 7) Periodic AI regime classification (best-effort, async)
             _maybe_run_regime(df15, df1h, df4h)
+
+            # 8) Weekly review on Sundays 00:05 KST (best-effort, async)
+            _maybe_run_weekly_review()
 
             time.sleep(cfg.LOOP_SEC)
 

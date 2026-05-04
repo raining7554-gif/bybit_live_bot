@@ -111,3 +111,51 @@ def send_daily_summary(total_pnl: float, trade_count: int):
         f"총 수익률: {total_pnl:+.2f}%\n"
         f"거래 횟수: {trade_count}회"
     )
+
+
+# ── 간이 명령 폴러 (/review /lessons /propose 등) ───────────────
+_last_update_id = 0
+
+
+def _normalize(text: str) -> str:
+    text = text.strip()
+    if not text.startswith("/"):
+        return text
+    head = text.split()[0]
+    if "@" in head:
+        head = head.split("@", 1)[0]
+    return head
+
+
+def poll_commands(handlers: dict):
+    """getUpdates 폴링 — handlers 는 {'/cmd': callable} 형식.
+
+    bybit notifier.poll_commands 와 같은 패턴. timeout=0으로 빠르게 반환.
+    """
+    global _last_update_id
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        r = requests.get(url, params={
+            "offset": _last_update_id + 1, "timeout": 0, "limit": 10,
+        }, timeout=6)
+        if r.status_code != 200:
+            return
+        updates = r.json().get("result", [])
+        for upd in updates:
+            _last_update_id = upd["update_id"]
+            msg = upd.get("message", {})
+            chat_id = str(msg.get("chat", {}).get("id", ""))
+            if chat_id and chat_id != str(TELEGRAM_CHAT_ID):
+                continue
+            text = _normalize(msg.get("text", ""))
+            handler = handlers.get(text)
+            if handler:
+                try:
+                    handler()
+                except Exception as e:
+                    print(f"[TG cmd EXC] {text}: {e}")
+                    send_error(f"명령 {text} 처리 오류: {e}")
+    except Exception as e:
+        print(f"[TG poll EXC] {e}")

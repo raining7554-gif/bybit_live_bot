@@ -3,6 +3,20 @@ import kis_auth as api
 import telegram
 from config import ACCOUNT_NO, IS_PAPER, OS_POSITION_USD
 
+try:
+    from intelligence import journal as _journal, agent as _agent
+except Exception as _e:
+    _journal = _agent = None
+    print(f"[OS_TRADER] intelligence import skip: {_e}")
+
+
+def _bot_id_for_strategy() -> str:
+    try:
+        from config import OS_STRATEGY_MODE
+        return f"kis_us_{OS_STRATEGY_MODE}"
+    except Exception:
+        return "kis_us"
+
 
 def _acc_parts():
     parts = ACCOUNT_NO.split("-")
@@ -153,6 +167,37 @@ def sell_overseas(ticker: str, name: str, exchange: str, qty: int,
             f"사유: {reason}",
             dedup_sec=30,
         )
+        # 공유 학습 모듈에 기록 + AI 사후분석
+        if _journal is not None:
+            try:
+                bot_id = _bot_id_for_strategy()
+                pnl_dollar = float((current_price - buy_price) * qty)
+                trade_id = _journal.log_trade(
+                    bot_id=bot_id, symbol=ticker, side="long",
+                    entry_price=float(buy_price),
+                    exit_price=float(current_price),
+                    size=float(qty), leverage=1.0,
+                    pnl=pnl_dollar, pnl_pct=pnl / 100.0,
+                    reason=reason, strategy="us",
+                    extra={"name": name, "exchange": exchange},
+                )
+                if _agent is not None:
+                    _agent.analyze_trade_async(
+                        bot_id=bot_id,
+                        trade={
+                            "symbol": ticker, "side": "long",
+                            "entry_price": buy_price, "exit_price": current_price,
+                            "pnl": pnl_dollar, "pnl_pct": pnl / 100.0,
+                            "reason": reason, "strategy": "us_leveraged",
+                            "leverage": 1.0,
+                        },
+                        snapshot={"market": "US", "name": name,
+                                  "qty": qty, "exchange": exchange},
+                        trade_id=trade_id or None,
+                        send_telegram=lambda m: telegram.send(m, dedup_sec=30),
+                    )
+            except Exception as e:
+                print(f"[OS_TRADER] intelligence log err: {e}")
         return True
     else:
         msg = f"해외 매도 실패 {name}({ticker}): {data.get('msg1', '')}"

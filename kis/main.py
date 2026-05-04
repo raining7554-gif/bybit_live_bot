@@ -1,4 +1,5 @@
 """KIS 자동매매 봇 v3.0 — 섹터 모멘텀 스윙"""
+import os
 import time
 from datetime import datetime
 import pytz
@@ -8,6 +9,13 @@ import monitor, monitor_overseas
 import telegram
 import kis_auth as api
 from market_calendar import is_trading_day
+
+# 공유 학습 모듈 (kis/intelligence/ 복사본). 실패해도 봇은 정상 동작.
+try:
+    from intelligence import journal as _journal, agent as _agent
+except Exception as _e:
+    _journal = _agent = None
+    print(f"[MAIN] intelligence 모듈 로드 실패: {_e}")
 from config import (
     DOM_SCAN_START, DOM_SCAN_END, DOM_EOD_CHECK, DOM_CLOSING_MSG,
     DOM_MAX_POSITIONS,
@@ -252,6 +260,8 @@ def main():
     health = _data_health_check()
     health_report = _format_health_report(health)
 
+    ai_label = ("🧠 AI: ON" if (_agent is not None and _agent._enabled())
+                else "🧠 AI: OFF")
     telegram.send_force(
         "🚀 <b>KIS 봇 v3.2 시작</b>\n"
         f"{paper_label}\n"
@@ -259,7 +269,8 @@ def main():
         f"{os_desc}\n"
         f"국내 진입창: {DOM_SCAN_START}~{DOM_SCAN_END}\n"
         f"해외 진입창: {OS_SCAN_TIME_START}~{OS_SCAN_TIME_END} KST\n"
-        f"현재 {hhmm()} KST"
+        f"현재 {hhmm()} KST\n"
+        f"{ai_label} | 명령: /review /lessons /propose"
         + (f"\n\n{health_report}" if health_report else "")
     )
 
@@ -278,9 +289,101 @@ def main():
     def elapsed(t):
         return 9999 if t is None else (now_kst() - t).seconds
 
+    # ════ 텔레그램 명령 핸들러 ═══════════════════════════════════
+    def _all_kis_bot_ids() -> list:
+        return [f"kis_kr_{DOM_STRATEGY_MODE}", f"kis_us_{OS_STRATEGY_MODE}"]
+
+    def cmd_review():
+        if _agent is None:
+            telegram.send("intelligence 모듈 미로드 — /review 사용 불가")
+            return
+        telegram.send("📊 KIS 주간 회고 분석 중...")
+        # 국내 + 미국 두 봇 각각 회고 (현재는 같은 SQLite, 봇별 분리)
+        for bid in _all_kis_bot_ids():
+            _agent.weekly_review_async(
+                bot_id=bid, send_telegram=lambda m: telegram.send(m, dedup_sec=60),
+                verbose_errors=True,
+            )
+
+    def cmd_lessons():
+        if _journal is None:
+            telegram.send("intelligence 모듈 미로드")
+            return
+        for bid in _all_kis_bot_ids():
+            rows = _journal.recent_lessons(bot_id=bid, limit=5)
+            if not rows:
+                telegram.send(f"📚 {bid}: 누적 교훈 없음", dedup_sec=60)
+                continue
+            lines = [f"📚 <b>{bid} 교훈</b>"]
+            for i, r in enumerate(rows, 1):
+                lines.append(f"{i}. {r.get('lesson', '?')}")
+            telegram.send("\n".join(lines), dedup_sec=60)
+
+    def cmd_propose():
+        if _agent is None:
+            telegram.send("intelligence 모듈 미로드")
+            return
+        telegram.send("⚙️ KIS 파라미터 제안 분석 중...")
+        # 현재 활성 파라미터 (일부만 노출)
+        from config import (
+            DOM_SMALL_SEED_MAX_PRICE, DOM_SMALL_SEED_POSITIONS,
+            OS_LEVERAGED_SIGNAL_MA, OS_LEVERAGED_AUX_MA,
+            DAILY_LOSS_CIRCUIT, CLENOW_EXIT_MA,
+        )
+        kr_params = {
+            "DOM_SMALL_SEED_MAX_PRICE": DOM_SMALL_SEED_MAX_PRICE,
+            "DOM_SMALL_SEED_POSITIONS": DOM_SMALL_SEED_POSITIONS,
+            "CLENOW_EXIT_MA": CLENOW_EXIT_MA,
+            "DAILY_LOSS_CIRCUIT": DAILY_LOSS_CIRCUIT,
+        }
+        us_params = {
+            "OS_LEVERAGED_SIGNAL_MA": OS_LEVERAGED_SIGNAL_MA,
+            "OS_LEVERAGED_AUX_MA": OS_LEVERAGED_AUX_MA,
+            "DAILY_LOSS_CIRCUIT": DAILY_LOSS_CIRCUIT,
+        }
+        _agent.propose_async(
+            bot_id=f"kis_kr_{DOM_STRATEGY_MODE}",
+            current_params=kr_params,
+            send_telegram=lambda m: telegram.send(m, dedup_sec=60),
+            verbose_errors=True,
+        )
+        _agent.propose_async(
+            bot_id=f"kis_us_{OS_STRATEGY_MODE}",
+            current_params=us_params,
+            send_telegram=lambda m: telegram.send(m, dedup_sec=60),
+            verbose_errors=True,
+        )
+
+    cmd_handlers = {
+        "/review":  cmd_review,
+        "/lessons": cmd_lessons,
+        "/propose": cmd_propose,
+    }
+    last_weekly_review_kst_date = ""
+
     while True:
         now = now_kst()
         t_hm = now.strftime("%H:%M")
+
+        # ════ 텔레그램 명령 폴링 ═══════════════════════════════
+        try:
+            telegram.poll_commands(cmd_handlers)
+        except Exception as e:
+            print(f"[MAIN] poll_commands err: {e}")
+
+        # ════ 일요일 자정 자동 주간 회고 ════════════════════════
+        if (_agent is not None
+                and now.weekday() == 6
+                and now.hour == 0 and now.minute < 15):
+            today_str = now.strftime("%Y-%m-%d")
+            if today_str != last_weekly_review_kst_date:
+                last_weekly_review_kst_date = today_str
+                print(f"[MAIN] 자동 주간 회고 트리거")
+                for bid in _all_kis_bot_ids():
+                    _agent.weekly_review_async(
+                        bot_id=bid,
+                        send_telegram=lambda m: telegram.send(m, dedup_sec=60),
+                    )
 
         # ════ 국내장 ════════════════════════════════════
         if is_dom_market_hours():
