@@ -141,6 +141,70 @@ def send_summary(dom_pos, os_pos, trade_count):
 
 
 # ═══════════════════════════════════════════════════════
+# 데이터 자가진단 (시작시 1회)
+# ═══════════════════════════════════════════════════════
+def _data_health_check() -> dict:
+    """KIS 일봉 API가 MA200/MA50 계산에 필요한 만큼 받아오는지 검증.
+
+    - KOSPI 지수 (clenow 체제 판정용)
+    - 해외 벤치마크 (각 ETF의 leveraged regime 판정용)
+
+    리턴: {symbol: int(받은 일수) | str(에러 메시지)}
+    """
+    results: dict = {}
+
+    if DOM_STRATEGY_MODE == "clenow":
+        try:
+            from strategy_clenow_kr import get_kr_daily
+            kospi = get_kr_daily("0001", count=220, market_code="U")
+            results["KOSPI"] = len(kospi)
+        except Exception as e:
+            results["KOSPI"] = f"ERR: {type(e).__name__}: {str(e)[:80]}"
+
+    if OS_STRATEGY_MODE == "leveraged":
+        try:
+            from strategy_leveraged import get_overseas_daily
+            allocations = (OS_SMALL_SEED_ALLOCATIONS if OS_SMALL_SEED_MODE
+                           else OS_LEVERAGED_ALLOCATIONS)
+            checked: set = set()
+            for alloc in allocations:
+                bench = alloc.get("benchmark", "SPY")
+                if bench in checked:
+                    continue
+                checked.add(bench)
+                exc = "NAS" if bench == "QQQ" else "AMS"
+                data = get_overseas_daily(bench, exchange=exc, count=220)
+                results[bench] = len(data)
+        except Exception as e:
+            results["US_BENCH"] = f"ERR: {type(e).__name__}: {str(e)[:80]}"
+
+    return results
+
+
+def _format_health_report(results: dict) -> str:
+    """텔레그램용 자가진단 결과 포매팅."""
+    if not results:
+        return ""
+    lines = ["🔍 <b>데이터 자가진단</b>"]
+    all_ok = True
+    for k, v in results.items():
+        if isinstance(v, int):
+            ok = v >= 200
+            icon = "✅" if ok else ("⚠️" if v >= 100 else "❌")
+            lines.append(f"  {k}: {v}일 {icon}")
+            if not ok:
+                all_ok = False
+        else:
+            lines.append(f"  {k}: ❌ {v}")
+            all_ok = False
+    if all_ok:
+        lines.append("→ 모든 데이터 정상")
+    else:
+        lines.append("→ ⚠️ 일부 데이터 부족 — 진입 안될 수 있음")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════
 # 메인
 # ═══════════════════════════════════════════════════════
 def main():
@@ -180,6 +244,10 @@ def main():
 
     paper_label = "📝 모의투자" if IS_PAPER else "💵 실거래"
 
+    # 데이터 자가진단 — 진입창 기다릴 필요 없이 즉시 API 정상 여부 확인
+    health = _data_health_check()
+    health_report = _format_health_report(health)
+
     telegram.send_force(
         "🚀 <b>KIS 봇 v3.2 시작</b>\n"
         f"{paper_label}\n"
@@ -188,6 +256,7 @@ def main():
         f"국내 진입창: {DOM_SCAN_START}~{DOM_SCAN_END}\n"
         f"해외 진입창: {OS_SCAN_TIME_START}~{OS_SCAN_TIME_END} KST\n"
         f"현재 {hhmm()} KST"
+        + (f"\n\n{health_report}" if health_report else "")
     )
 
     dom_pos, os_pos = {}, {}
