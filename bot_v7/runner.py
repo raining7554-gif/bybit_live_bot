@@ -379,7 +379,7 @@ def _setup_handlers():
         d15, d1h, d4h = strat.compute_indicators(df15, df1h, df4h)
         snap = ai.market_snapshot(d15, d1h, d4h)
         tg.send("🧠 레짐 분석 중...")
-        ai.detect_regime_async(snap, send_telegram=True)
+        ai.detect_regime_async(snap, send_telegram=True, verbose_errors=True)
 
     def halt():
         global _safety
