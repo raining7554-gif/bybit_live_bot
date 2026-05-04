@@ -10,6 +10,38 @@ except Exception as _e:
     print(f"[OS_TRADER] intelligence import skip: {_e}")
 
 
+def _safe_float(v, default: float = 0.0) -> float:
+    """API 가 빈 문자열/None 돌려줘도 안전하게 0 으로."""
+    if v is None or v == "":
+        return default
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return default
+
+
+def _get_price_safe(exchange: str, ticker: str) -> float:
+    """현재가 조회 — last 비어있으면 base / open / pre 순으로 fallback."""
+    try:
+        price_data = api.get(
+            "/uapi/overseas-price/v1/quotations/price",
+            "HHDFS00000300",
+            {"AUTH": "", "EXCD": exchange, "SYMB": ticker},
+        )
+    except Exception as e:
+        print(f"[OS_TRADER] {ticker} 시세 API 오류: {e}")
+        return 0.0
+    out = price_data.get("output", {}) if isinstance(price_data, dict) else {}
+    for key in ("last", "base", "open", "pre"):
+        v = _safe_float(out.get(key))
+        if v > 0:
+            if key != "last":
+                print(f"[OS_TRADER] {ticker} last 비어있어 {key}={v} 사용")
+            return v
+    print(f"[OS_TRADER] {ticker} 시세 모든 필드 비어있음 → 스킵")
+    return 0.0
+
+
 def _bot_id_for_strategy() -> str:
     try:
         from config import OS_STRATEGY_MODE
@@ -42,8 +74,8 @@ def get_overseas_balance() -> dict:
         if data.get("rt_cd") == "0":
             o3 = data.get("output3", {})
             return {
-                "total_eval_usd": float(o3.get("tot_asst_amt", 0)),
-                "available_usd": float(o3.get("ord_psbl_frcr_amt", 0)),
+                "total_eval_usd": _safe_float(o3.get("tot_asst_amt")),
+                "available_usd": _safe_float(o3.get("ord_psbl_frcr_amt")),
             }
     except Exception as e:
         print(f"[OS_TRADER] 잔고 조회 오류: {e}")
@@ -70,14 +102,8 @@ def buy_overseas(ticker: str, name: str, exchange: str,
     acc_no, acc_prod = _acc_parts()
     tr_id = "VTTT1002U" if IS_PAPER else "TTTT1002U"
 
-    price_data = api.get(
-        "/uapi/overseas-price/v1/quotations/price",
-        "HHDFS00000300",
-        {"AUTH": "", "EXCD": exchange, "SYMB": ticker},
-    )
-    current_price = float(price_data.get("output", {}).get("last", 0))
+    current_price = _get_price_safe(exchange, ticker)
     if current_price == 0:
-        print(f"[OS_TRADER] 현재가 조회 실패: {ticker}")
         return None
 
     qty = calc_overseas_qty(current_price, budget_override=full_allocation_usd)
@@ -136,12 +162,7 @@ def sell_overseas(ticker: str, name: str, exchange: str, qty: int,
     acc_no, acc_prod = _acc_parts()
     tr_id = "VTTT1006U" if IS_PAPER else "TTTT1006U"
 
-    price_data = api.get(
-        "/uapi/overseas-price/v1/quotations/price",
-        "HHDFS00000300",
-        {"AUTH": "", "EXCD": exchange, "SYMB": ticker},
-    )
-    current_price = float(price_data.get("output", {}).get("last", 0))
+    current_price = _get_price_safe(exchange, ticker)
 
     body = {
         "CANO": acc_no,

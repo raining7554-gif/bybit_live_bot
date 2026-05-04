@@ -15,15 +15,27 @@ _state: dict = {}
 
 
 def get_current_price(ticker: str, exchange: str) -> float:
+    """현재가. last 가 빈 문자열일 수 있어 fallback (base / open) 까지 시도."""
     try:
         data = api.get(
             "/uapi/overseas-price/v1/quotations/price",
             "HHDFS00000300",
             {"AUTH": "", "EXCD": exchange, "SYMB": ticker},
         )
-        return float(data.get("output", {}).get("last", 0))
+        out = data.get("output", {}) if isinstance(data, dict) else {}
     except Exception:
         return 0.0
+    for key in ("last", "base", "open", "pre"):
+        v = out.get(key)
+        if v is None or v == "":
+            continue
+        try:
+            fv = float(v)
+            if fv > 0:
+                return fv
+        except (ValueError, TypeError):
+            continue
+    return 0.0
 
 
 def register_os_position(ticker: str, buy_price: float):

@@ -30,6 +30,15 @@ def get_overseas_daily(ticker: str, exchange: str, count: int = 200) -> list:
     return _get_overseas_daily_paginated(ticker, exchange=exchange, count=count)
 
 
+def _safe_float(v, default: float = 0.0) -> float:
+    if v is None or v == "":
+        return default
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return default
+
+
 def get_overseas_current(ticker: str, exchange: str) -> dict:
     try:
         data = api.get(
@@ -39,10 +48,16 @@ def get_overseas_current(ticker: str, exchange: str) -> dict:
         )
         if data.get("rt_cd") == "0":
             o = data.get("output", {})
+            # last 비어있으면 base / open 으로 fallback
+            price = 0.0
+            for key in ("last", "base", "open", "pre"):
+                price = _safe_float(o.get(key))
+                if price > 0:
+                    break
             return {
-                "price": float(o.get("last", 0)),
-                "change_rate": float(o.get("rate", 0)),
-                "volume": int(float(o.get("tvol", 0))),
+                "price": price,
+                "change_rate": _safe_float(o.get("rate")),
+                "volume": int(_safe_float(o.get("tvol"))),
             }
     except Exception:
         pass
