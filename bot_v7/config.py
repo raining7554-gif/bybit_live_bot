@@ -53,10 +53,11 @@ TP_MARGIN_BASE    = 0.06   # base:  +6% margin → close (was +10%)
 TP1_MARGIN_MID    = 0.10   # mid:   TP1 +10% partial 50% → BE+trail rest
 TP_MARGIN_HIGH    = None   # high:  no fixed TP — BE+trail only
 
-# Per-tier ATR trail multiplier (mid + high are wider for trend riding)
+# Per-tier ATR trail multiplier (v10.2: widened — let trends run further;
+# previously mid=2.5 / high=3.0 cashed out on normal pullbacks)
 TRAIL_ATR_DEFAULT = 1.5
-TRAIL_ATR_MID     = 2.5
-TRAIL_ATR_HIGH    = 3.0
+TRAIL_ATR_MID     = 3.0
+TRAIL_ATR_HIGH    = 4.0
 
 # ─── Stop / trail ──────────────────────────────────────────────
 ATR_STOP_MULT  = 1.5
