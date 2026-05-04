@@ -16,44 +16,18 @@
 import kis_auth as api
 from config import OS_STOP_LOSS, OS_TRAIL_DROP
 
+# v11.1: 페이지네이션 + 거래소 fallback 적용된 통합 일봉 함수 사용.
+# strategy_leveraged.py 의 함수가 BYMD 페이지네이션 + AMS/NYS/NAS fallback 처리.
+from strategy_leveraged import get_overseas_daily as _get_overseas_daily_paginated
 
-# ═══════════════════════════════════════════════════════
-# 일봉 조회 (해외)
-# ═══════════════════════════════════════════════════════
+
 def get_overseas_daily(ticker: str, exchange: str, count: int = 200) -> list:
-    """해외 일봉 조회"""
-    try:
-        data = api.get(
-            "/uapi/overseas-price/v1/quotations/dailyprice",
-            "HHDFS76240000",
-            {
-                "AUTH": "",
-                "EXCD": exchange,
-                "SYMB": ticker,
-                "GUBN": "0",  # 0=일, 1=주, 2=월
-                "BYMD": "",
-                "MODP": "1",
-            },
-        )
-        if data.get("rt_cd") != "0":
-            return []
-        outputs = data.get("output2", [])
-        result = []
-        for o in outputs[:count]:
-            try:
-                result.append({
-                    "date":   o.get("xymd", ""),
-                    "close":  float(o.get("clos", 0)),
-                    "high":   float(o.get("high", 0)),
-                    "low":    float(o.get("low", 0)),
-                    "volume": int(float(o.get("tvol", 0))),
-                })
-            except (ValueError, TypeError):
-                continue
-        return result
-    except Exception as e:
-        print(f"[OS_STRATEGY] {ticker} 일봉 조회 오류: {e}")
-        return []
+    """해외 일봉 조회 (페이지네이션 + 거래소 fallback).
+
+    이전엔 단일 호출(~100건)만 해서 MA200 계산 실패. v11.1에서
+    strategy_leveraged 의 페이지네이션 함수로 교체.
+    """
+    return _get_overseas_daily_paginated(ticker, exchange=exchange, count=count)
 
 
 def get_overseas_current(ticker: str, exchange: str) -> dict:
