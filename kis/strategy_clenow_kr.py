@@ -502,19 +502,25 @@ def clenow_score(closes: list[float], n: int = 120) -> float:
 
 
 def check_kospi_regime() -> dict:
-    """KOSPI > MA200 판정 (지수는 market_code='U' 필수)"""
-    candles = get_kr_daily("0001", count=220, market_code="U")  # KOSPI 지수
+    """KOSPI 체제 판정 (KODEX 200 ETF로 근사).
+
+    KIS의 itemchartprice 엔드포인트는 지수(market_code="U")를 지원하지 않음.
+    KODEX 200(069500)이 KOSPI 200을 1:1 추종하므로 MA200 regime 판정에 동등.
+    실패 시 시총 1위 삼성전자로 한 번 더 fallback.
+    """
+    candles = get_kr_daily("069500", count=220, market_code="J")  # KODEX 200
     if len(candles) < 200:
-        # 지수 조회 실패 시 대표주 삼성전자로 근사 (주식 = "J")
+        # ETF 조회 실패 시 시총 1위 삼성전자로 근사
+        print(f"[CLENOW] KODEX200 일봉 {len(candles)}일 부족 → 삼성전자 fallback")
         candles = get_kr_daily("005930", count=220, market_code="J")
     if len(candles) < 200:
-        print(f"[CLENOW] KOSPI 일봉 {len(candles)}일 → 200 미만, 데이터 부족")
+        print(f"[CLENOW] 한국 시장 일봉 {len(candles)}일 → 200 미만, UNKNOWN")
         return {"regime": "UNKNOWN", "close": 0, "ma200": 0}
     closes = [c["close"] for c in candles]
     close = closes[0]
     ma200 = _sma(closes, 200)
     regime = "BULL" if close > ma200 else "BEAR"
-    print(f"[CLENOW] KOSPI={close:.2f} MA200={ma200:.2f} → {regime}")
+    print(f"[CLENOW] KODEX200={close:.0f} MA200={ma200:.0f} → {regime}")
     return {"regime": regime, "close": close, "ma200": ma200}
 
 
