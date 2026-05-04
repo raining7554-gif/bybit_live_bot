@@ -156,10 +156,14 @@ def _data_health_check() -> dict:
     if DOM_STRATEGY_MODE == "clenow":
         try:
             from strategy_clenow_kr import get_kr_daily
-            kospi = get_kr_daily("0001", count=220, market_code="U")
-            results["KOSPI"] = len(kospi)
+            # KIS itemchartprice 엔드포인트가 지수("U") 미지원이라
+            # KODEX 200 (069500) ETF로 KOSPI 200 근사. 실패 시 삼성전자 fallback.
+            kospi = get_kr_daily("069500", count=220, market_code="J")
+            if len(kospi) < 200:
+                kospi = get_kr_daily("005930", count=220, market_code="J")
+            results["KOSPI(proxy)"] = len(kospi)
         except Exception as e:
-            results["KOSPI"] = f"ERR: {type(e).__name__}: {str(e)[:80]}"
+            results["KOSPI(proxy)"] = f"ERR: {type(e).__name__}: {str(e)[:80]}"
 
     if OS_STRATEGY_MODE == "leveraged":
         try:
