@@ -37,10 +37,10 @@ def _enabled() -> bool:
 
 
 def _call_gemini(prompt: str, *, want_json: bool = False,
-                 timeout: int = 20) -> Optional[str]:
-    """Single REST call. Returns text or None on any failure."""
+                 timeout: int = 20) -> tuple[Optional[str], Optional[str]]:
+    """Single REST call. Returns (text, error_msg). On success error_msg is None."""
     if not _enabled():
-        return None
+        return None, "AI disabled"
     url = f"{_API_BASE}/{cfg.AI_MODEL}:generateContent?key={cfg.GEMINI_API_KEY}"
     body: dict = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -54,19 +54,24 @@ def _call_gemini(prompt: str, *, want_json: bool = False,
     try:
         r = requests.post(url, json=body, timeout=timeout)
         if r.status_code != 200:
-            print(f"[AI {r.status_code}] {r.text[:200]}", flush=True)
-            return None
+            err = f"HTTP {r.status_code}: {r.text[:200]}"
+            print(f"[AI {err}]", flush=True)
+            return None, err
         data = r.json()
         cands = data.get("candidates", [])
         if not cands:
-            print(f"[AI no-candidates] {str(data)[:200]}", flush=True)
-            return None
+            err = f"no candidates: {str(data)[:200]}"
+            print(f"[AI {err}]", flush=True)
+            return None, err
         parts = cands[0].get("content", {}).get("parts", [])
         text = "".join(p.get("text", "") for p in parts).strip()
-        return text or None
+        if not text:
+            return None, "empty text in response"
+        return text, None
     except Exception as e:
-        print(f"[AI exc] {type(e).__name__}: {e}", flush=True)
-        return None
+        err = f"{type(e).__name__}: {e}"
+        print(f"[AI exc] {err}", flush=True)
+        return None, err
 
 
 # ── Trade post-mortem ──────────────────────────────────────────────
@@ -97,8 +102,10 @@ def _build_postmortem_prompt(trade: dict, snapshot: dict) -> str:
 
 
 def _postmortem_worker(trade: dict, snapshot: dict):
-    text = _call_gemini(_build_postmortem_prompt(trade, snapshot))
+    text, err = _call_gemini(_build_postmortem_prompt(trade, snapshot))
     if not text:
+        # Background — don't spam Telegram on transient failures, just log
+        print(f"[AI postmortem skipped] {err}", flush=True)
         return
     pnl = trade.get("pnl", 0)
     icon = "🧠✅" if pnl >= 0 else "🧠❌"
@@ -133,15 +140,42 @@ def _build_regime_prompt(snapshot: dict) -> str:
     )
 
 
-def _regime_worker(snapshot: dict, send_telegram: bool):
-    global _last_regime, _last_regime_ts
-    text = _call_gemini(_build_regime_prompt(snapshot), want_json=True)
-    if not text:
-        return
+def _extract_json(text: str) -> Optional[dict]:
+    """Tolerant JSON extractor: handles raw JSON, ```json fences, prose around JSON."""
+    text = text.strip()
+    # Strip code fence
+    if text.startswith("```"):
+        lines = [ln for ln in text.splitlines() if not ln.startswith("```")]
+        text = "\n".join(lines).strip()
+    # Try direct
     try:
-        parsed = json.loads(text)
-    except Exception as e:
-        print(f"[AI regime parse err] {e} — text={text[:200]}", flush=True)
+        return json.loads(text)
+    except Exception:
+        pass
+    # Find first {...} block
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except Exception:
+            return None
+    return None
+
+
+def _regime_worker(snapshot: dict, send_telegram: bool, verbose_errors: bool):
+    global _last_regime, _last_regime_ts
+    text, err = _call_gemini(_build_regime_prompt(snapshot), want_json=True)
+    if not text:
+        if verbose_errors:
+            tg.send(f"⚠️ AI 호출 실패\n{err}")
+        return
+    parsed = _extract_json(text)
+    if parsed is None:
+        msg = f"JSON 파싱 실패 — 응답: {text[:200]}"
+        print(f"[AI regime parse err] {msg}", flush=True)
+        if verbose_errors:
+            tg.send(f"⚠️ AI 응답 파싱 실패\n{text[:300]}")
         return
     parsed["_ts"] = time.time()
     _last_regime = parsed
@@ -156,11 +190,12 @@ def _regime_worker(snapshot: dict, send_telegram: bool):
         )
 
 
-def detect_regime_async(snapshot: dict, *, send_telegram: bool = False):
+def detect_regime_async(snapshot: dict, *, send_telegram: bool = False,
+                        verbose_errors: bool = False):
     if not _enabled():
         return
     threading.Thread(
-        target=_regime_worker, args=(snapshot, send_telegram),
+        target=_regime_worker, args=(snapshot, send_telegram, verbose_errors),
         daemon=True, name="ai-regime",
     ).start()
 

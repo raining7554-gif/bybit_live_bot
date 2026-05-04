@@ -47,8 +47,8 @@ import pandas as pd
 
 ATR_STOP_MULT = 1.5
 ATR_TRAIL_MULT = 1.5      # default trail (used by base/probe/micro if any)
-ATR_TRAIL_MID  = 2.5      # v9: mid tier wider trail
-ATR_TRAIL_HIGH = 3.0      # v9: high tier widest trail
+ATR_TRAIL_MID  = 3.0      # v10.2: widened from 2.5 to ride trends further
+ATR_TRAIL_HIGH = 4.0      # v10.2: widened from 3.0 to ride trends further
 COOLDOWN_BARS_LOSS = 6
 TP_SCALE_R = 2.0
 

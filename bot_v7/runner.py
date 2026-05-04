@@ -379,7 +379,7 @@ def _setup_handlers():
         d15, d1h, d4h = strat.compute_indicators(df15, df1h, df4h)
         snap = ai.market_snapshot(d15, d1h, d4h)
         tg.send("🧠 레짐 분석 중...")
-        ai.detect_regime_async(snap, send_telegram=True)
+        ai.detect_regime_async(snap, send_telegram=True, verbose_errors=True)
 
     def halt():
         global _safety
@@ -541,8 +541,8 @@ def main():
         f"  55-59 → 3x  / 증거금 30% / TP +2%\n"
         f"  60-69 → 5x  / 증거금 40% / TP +3%\n"
         f"  70-79 → 10x / 증거금 50% / TP +6%\n"
-        f"  80-89 → 15x / 증거금 65% / TP1 +10% → 2.5×ATR 트레일\n"
-        f"  90+   → 20x / 증거금 80% / 3.0×ATR 트레일 (끝까지)\n"
+        f"  80-89 → 15x / 증거금 65% / TP1 +10% → 3.0×ATR 트레일\n"
+        f"  90+   → 20x / 증거금 80% / 4.0×ATR 트레일 (끝까지)\n"
         f"━ MR (평균회귀) ━\n"
         f"  5x / 증거금 50% / BB 중간선 TP\n"
         f"━ 안전 ━\n"
