@@ -1,23 +1,58 @@
-"""나스닥 스캐너 v3.0 — 메가캡 + AI 대장주 스윙
+"""나스닥 스캐너 v3.1 — NASDAQ-100 핵심 종목 스윙 (universe 10 → 약 35)
 
-유니버스 10종목에 대해 일봉 기준 조건 체크.
-소수점 매매 안 함 (1주 이상만 진입 가능).
+유니버스 35종목 (NASDAQ-100 시총 상위 + S&P 500 IT/반도체 핵심).
+소수점 매매 안 함 (1주 이상만 진입 가능). 시드 작으면 OS_POSITION_USD
+를 넘는 비싼 종목은 자동 제외 (가격 필터).
 """
 from config import OS_POSITION_USD
 from strategy_overseas import get_os_regime, check_os_entry, get_overseas_current
 
-# 메가캡 + AI/반도체 핵심 10종목
+# v3.1 universe: NASDAQ-100 + 미국 반도체/AI/클라우드 핵심.
+# 가격이 OS_POSITION_USD 초과면 런타임에 자동 스킵되므로 시드 규모 무관하게 등록.
 OS_UNIVERSE = [
-    {"ticker": "NVDA",  "name": "엔비디아",     "exchange": "NAS"},
-    {"ticker": "MSFT",  "name": "마이크로소프트","exchange": "NAS"},
-    {"ticker": "GOOGL", "name": "알파벳",       "exchange": "NAS"},
-    {"ticker": "META",  "name": "메타",         "exchange": "NAS"},
-    {"ticker": "AVGO",  "name": "브로드컴",     "exchange": "NAS"},
-    {"ticker": "AMD",   "name": "AMD",          "exchange": "NAS"},
-    {"ticker": "TSM",   "name": "TSMC",         "exchange": "NYS"},
-    {"ticker": "PLTR",  "name": "팔란티어",     "exchange": "NAS"},
-    {"ticker": "CRWD",  "name": "크라우드스트라이크","exchange": "NAS"},
-    {"ticker": "QQQ",   "name": "나스닥ETF",    "exchange": "NAS"},
+    # ── 메가캡 (FAANG + AI 대장) ──────────────────────────
+    {"ticker": "NVDA",  "name": "엔비디아",        "exchange": "NAS"},
+    {"ticker": "MSFT",  "name": "마이크로소프트",  "exchange": "NAS"},
+    {"ticker": "GOOGL", "name": "알파벳",          "exchange": "NAS"},
+    {"ticker": "META",  "name": "메타",            "exchange": "NAS"},
+    {"ticker": "AAPL",  "name": "애플",            "exchange": "NAS"},
+    {"ticker": "AMZN",  "name": "아마존",          "exchange": "NAS"},
+    {"ticker": "TSLA",  "name": "테슬라",          "exchange": "NAS"},
+    {"ticker": "NFLX",  "name": "넷플릭스",        "exchange": "NAS"},
+    # ── 반도체 ────────────────────────────────────────────
+    {"ticker": "AVGO",  "name": "브로드컴",        "exchange": "NAS"},
+    {"ticker": "AMD",   "name": "AMD",             "exchange": "NAS"},
+    {"ticker": "TSM",   "name": "TSMC",            "exchange": "NYS"},
+    {"ticker": "INTC",  "name": "인텔",            "exchange": "NAS"},
+    {"ticker": "QCOM",  "name": "퀄컴",            "exchange": "NAS"},
+    {"ticker": "TXN",   "name": "텍사스인스트루먼츠", "exchange": "NAS"},
+    {"ticker": "MU",    "name": "마이크론",        "exchange": "NAS"},
+    {"ticker": "AMAT",  "name": "어플라이드머티리얼", "exchange": "NAS"},
+    {"ticker": "LRCX",  "name": "램리서치",        "exchange": "NAS"},
+    {"ticker": "KLAC",  "name": "KLA",             "exchange": "NAS"},
+    {"ticker": "ASML",  "name": "ASML",            "exchange": "NAS"},
+    {"ticker": "ARM",   "name": "ARM",             "exchange": "NAS"},
+    # ── 클라우드 / SaaS / 보안 ─────────────────────────────
+    {"ticker": "ORCL",  "name": "오라클",          "exchange": "NYS"},
+    {"ticker": "CRM",   "name": "세일즈포스",      "exchange": "NYS"},
+    {"ticker": "ADBE",  "name": "어도비",          "exchange": "NAS"},
+    {"ticker": "NOW",   "name": "서비스나우",      "exchange": "NYS"},
+    {"ticker": "INTU",  "name": "인튜이트",        "exchange": "NAS"},
+    {"ticker": "PANW",  "name": "팔로알토",        "exchange": "NAS"},
+    {"ticker": "CRWD",  "name": "크라우드스트라이크", "exchange": "NAS"},
+    {"ticker": "ZS",    "name": "지스케일러",      "exchange": "NAS"},
+    {"ticker": "DDOG",  "name": "데이터독",        "exchange": "NAS"},
+    {"ticker": "ANET",  "name": "아리스타",        "exchange": "NYS"},
+    {"ticker": "SNOW",  "name": "스노우플레이크",  "exchange": "NYS"},
+    # ── 핀테크 / 신성장 / 기타 ─────────────────────────────
+    {"ticker": "PLTR",  "name": "팔란티어",        "exchange": "NAS"},
+    {"ticker": "COIN",  "name": "코인베이스",      "exchange": "NAS"},
+    {"ticker": "SHOP",  "name": "쇼피파이",        "exchange": "NAS"},
+    {"ticker": "UBER",  "name": "우버",            "exchange": "NYS"},
+    {"ticker": "ABNB",  "name": "에어비앤비",      "exchange": "NAS"},
+    # ── 인덱스 ETF (방어/벤치) ────────────────────────────
+    {"ticker": "QQQ",   "name": "나스닥100 ETF",   "exchange": "NAS"},
+    {"ticker": "SPY",   "name": "S&P500 ETF",      "exchange": "AMS"},
 ]
 
 
