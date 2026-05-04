@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 import math
+from datetime import datetime, timedelta
 import numpy as np
 import kis_auth as api
 
@@ -386,26 +387,35 @@ KR_UNIVERSE_TOP350 = [
 # ═══════════════════════════════════════════════════════
 # 일봉 조회 (KIS API) — 전 종목 조회는 느리니 캐시 권장
 # ═══════════════════════════════════════════════════════
-def get_kr_daily(ticker: str, count: int = 140) -> list:
-    """KR 종목 일봉 조회 (최신순, count 일)"""
+def _fetch_kr_daily_chunk(ticker: str, market_code: str,
+                          start_yyyymmdd: str, end_yyyymmdd: str) -> list:
+    """단일 호출. itemchartprice는 한 번에 최대 ~100건, 최신순 반환."""
     try:
         data = api.get(
-            "/uapi/domestic-stock/v1/quotations/inquire-daily-price",
-            "FHKST01010400",
+            "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
+            "FHKST03010100",
             {
-                "fid_cond_mrkt_div_code": "J",
-                "fid_input_iscd": ticker,
-                "fid_org_adj_prc": "1",
-                "fid_period_div_code": "D",
+                "FID_COND_MRKT_DIV_CODE": market_code,
+                "FID_INPUT_ISCD": ticker,
+                "FID_INPUT_DATE_1": start_yyyymmdd,
+                "FID_INPUT_DATE_2": end_yyyymmdd,
+                "FID_PERIOD_DIV_CODE": "D",
+                "FID_ORG_ADJ_PRC": "1",
             },
         )
-        outputs = data.get("output2") or data.get("output") or []
+        if data.get("rt_cd") != "0":
+            print(f"[CLENOW] {ticker} chunk err: {data.get('msg1', '?')}")
+            return []
+        outputs = data.get("output2", []) or []
         out = []
-        for o in outputs[:count]:
+        for o in outputs:
             try:
+                close = float(o.get("stck_clpr", 0))
+                if close <= 0:
+                    continue
                 out.append({
                     "date": o.get("stck_bsop_date", ""),
-                    "close": float(o.get("stck_clpr", 0)),
+                    "close": close,
                     "high": float(o.get("stck_hgpr", 0)),
                     "low": float(o.get("stck_lwpr", 0)),
                     "volume": int(float(o.get("acml_vol", 0))),
@@ -414,8 +424,57 @@ def get_kr_daily(ticker: str, count: int = 140) -> list:
                 continue
         return out
     except Exception as e:
-        print(f"[CLENOW] {ticker} 일봉 오류: {e}")
+        print(f"[CLENOW] {ticker} chunk fetch err: {e}")
         return []
+
+
+def get_kr_daily(ticker: str, count: int = 140, market_code: str = "J") -> list:
+    """KR 종목/지수 일봉 조회 (최신순, 최대 count 일).
+
+    market_code:
+      "J" → 주식 (예: 005930 삼성전자)
+      "U" → 지수 (예: 0001 KOSPI, 1001 KOSDAQ)
+
+    KIS의 itemchartprice는 1회 호출당 최대 100건 반환.
+    count > 100 인 경우 날짜 범위를 끊어서 여러 번 호출 (페이지네이션).
+    """
+    end_dt = datetime.now()
+    chunk_days = 150  # 캘린더일 150 ≈ 거래일 100
+    max_iters = max(2, (count // 90) + 2)
+
+    all_candles: list = []
+    seen: set = set()
+
+    for _ in range(max_iters):
+        start_dt = end_dt - timedelta(days=chunk_days)
+        chunk = _fetch_kr_daily_chunk(
+            ticker, market_code,
+            start_dt.strftime("%Y%m%d"),
+            end_dt.strftime("%Y%m%d"),
+        )
+        if not chunk:
+            break
+        new_count = 0
+        for c in chunk:
+            d = c["date"]
+            if not d or d in seen:
+                continue
+            seen.add(d)
+            all_candles.append(c)
+            new_count += 1
+        if new_count == 0:
+            break
+        if len(all_candles) >= count:
+            break
+        # 다음 청크: 가장 오래된 날 - 1
+        oldest = min(seen)
+        try:
+            end_dt = datetime.strptime(oldest, "%Y%m%d") - timedelta(days=1)
+        except Exception:
+            break
+
+    all_candles.sort(key=lambda c: c["date"], reverse=True)
+    return all_candles[:count]
 
 
 def _sma(values: list[float], n: int) -> float:
@@ -443,17 +502,19 @@ def clenow_score(closes: list[float], n: int = 120) -> float:
 
 
 def check_kospi_regime() -> dict:
-    """KOSPI > MA200 판정"""
-    candles = get_kr_daily("0001", count=220)  # KOSPI 지수
+    """KOSPI > MA200 판정 (지수는 market_code='U' 필수)"""
+    candles = get_kr_daily("0001", count=220, market_code="U")  # KOSPI 지수
     if len(candles) < 200:
-        # 지수 조회 실패 시 대표주 삼성전자로 근사
-        candles = get_kr_daily("005930", count=220)
+        # 지수 조회 실패 시 대표주 삼성전자로 근사 (주식 = "J")
+        candles = get_kr_daily("005930", count=220, market_code="J")
     if len(candles) < 200:
+        print(f"[CLENOW] KOSPI 일봉 {len(candles)}일 → 200 미만, 데이터 부족")
         return {"regime": "UNKNOWN", "close": 0, "ma200": 0}
     closes = [c["close"] for c in candles]
     close = closes[0]
     ma200 = _sma(closes, 200)
     regime = "BULL" if close > ma200 else "BEAR"
+    print(f"[CLENOW] KOSPI={close:.2f} MA200={ma200:.2f} → {regime}")
     return {"regime": regime, "close": close, "ma200": ma200}
 
 

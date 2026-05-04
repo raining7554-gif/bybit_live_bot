@@ -16,7 +16,7 @@
   - SOXL+TQQQ+TECL+FAS:   CAGR +38%, MDD -44%  → $25,029  ⭐
 """
 from __future__ import annotations
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import pytz
 import kis_auth as api
 
@@ -24,37 +24,103 @@ import kis_auth as api
 # ═══════════════════════════════════════════════════════
 # 벤치/레버리지 ETF 일봉 조회 (KIS API 해외)
 # ═══════════════════════════════════════════════════════
-def get_overseas_daily(ticker: str, exchange: str = "NAS", count: int = 220) -> list:
-    """해외 일봉 조회 (KIS API)"""
+
+# SPY 같은 NYSE Arca 상장 ETF는 거래소 코드가 환경/시점별로 다를 수 있어
+# 전부 시도하는 fallback 순서. 우선 호출자가 준 거래소 → 안되면 fallback.
+_OVERSEAS_FALLBACKS = ("AMS", "NYS", "NAS")
+
+
+def _fetch_overseas_chunk(ticker: str, exchange: str, end_yyyymmdd: str = "") -> list:
+    """단일 호출. BYMD = end date (YYYYMMDD) 또는 ""(=오늘)."""
     try:
         data = api.get(
             "/uapi/overseas-price/v1/quotations/dailyprice",
             "HHDFS76240000",
             {
                 "AUTH": "", "EXCD": exchange, "SYMB": ticker,
-                "GUBN": "0", "BYMD": "", "MODP": "1",
+                "GUBN": "0", "BYMD": end_yyyymmdd, "MODP": "1",
             },
         )
         if data.get("rt_cd") != "0":
             return []
-        outputs = data.get("output2", [])
-        # 최신순 정렬된 상태로 반환
-        result = []
-        for o in outputs[:count]:
+        outputs = data.get("output2", []) or []
+        out = []
+        for o in outputs:
             try:
-                result.append({
+                close = float(o.get("clos", 0))
+                if close <= 0:
+                    continue
+                out.append({
                     "date": o.get("xymd", ""),
-                    "close": float(o.get("clos", 0)),
+                    "close": close,
                     "high": float(o.get("high", 0)),
                     "low": float(o.get("low", 0)),
                     "volume": int(float(o.get("tvol", 0))),
                 })
             except (ValueError, TypeError):
                 continue
-        return result
+        return out
     except Exception as e:
-        print(f"[LEV] {ticker} 일봉 조회 오류: {e}")
+        print(f"[LEV] {ticker}@{exchange} chunk err: {e}")
         return []
+
+
+def _try_one_exchange(ticker: str, exchange: str, count: int) -> list:
+    """주어진 거래소에서 BYMD 페이지네이션으로 count일치 모으기.
+    부족하면 빈 리스트 반환 (호출자가 다음 거래소 시도)."""
+    all_candles: list = []
+    seen: set = set()
+    end_yyyymmdd = ""  # 첫 호출은 오늘 기준
+
+    for _ in range(5):  # 최대 5회 청크 (~500거래일)
+        chunk = _fetch_overseas_chunk(ticker, exchange, end_yyyymmdd)
+        if not chunk:
+            break
+        new_count = 0
+        for c in chunk:
+            d = c["date"]
+            if not d or d in seen:
+                continue
+            seen.add(d)
+            all_candles.append(c)
+            new_count += 1
+        if new_count == 0:
+            break
+        if len(all_candles) >= count:
+            break
+        # 다음 청크: 가장 오래된 날 - 1
+        oldest = min(seen)
+        try:
+            end_yyyymmdd = (datetime.strptime(oldest, "%Y%m%d")
+                            - timedelta(days=1)).strftime("%Y%m%d")
+        except Exception:
+            break
+
+    all_candles.sort(key=lambda c: c["date"], reverse=True)
+    return all_candles[:count]
+
+
+def get_overseas_daily(ticker: str, exchange: str = "NAS", count: int = 220) -> list:
+    """해외 일봉 조회 (KIS API). 페이지네이션 + 거래소 fallback.
+
+    - HHDFS76240000 한 번에 ~100건 → BYMD로 끊어서 여러 번 호출
+    - SPY 등 거래소 코드 애매한 경우 AMS → NYS → NAS 순으로 시도
+    """
+    candidates = [exchange]
+    for fb in _OVERSEAS_FALLBACKS:
+        if fb not in candidates:
+            candidates.append(fb)
+
+    for exc in candidates:
+        candles = _try_one_exchange(ticker, exc, count)
+        # 절반이라도 받으면 사용 (regime 판단에 충분한 경우 있음)
+        if len(candles) >= max(count // 2, 50):
+            if exc != exchange:
+                print(f"[LEV] {ticker}: {exchange} 실패 → {exc} 로 {len(candles)}건 확보")
+            return candles
+
+    print(f"[LEV] {ticker}: 모든 거래소({','.join(candidates)}) 실패")
+    return []
 
 
 def _sma(values: list[float], n: int) -> float:
