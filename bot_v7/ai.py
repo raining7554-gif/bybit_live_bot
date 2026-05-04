@@ -1,215 +1,58 @@
-"""Gemini-powered analysis layer (free tier).
+"""Bybit 봇 AI 레이어 — intelligence/ 모듈을 호출하는 thin wrapper.
 
-Two responsibilities:
-  1. Post-mortem on every closed trade  → short Korean lesson via Telegram
-  2. Hourly market-regime classification → tag + suggested strategy
+기존 단독 ai.py 대신 cross-bot 공유 모듈 (intelligence/) 을 사용.
+거래/분석/레짐/제안이 모두 SQLite (`/data/intelligence.db`) 에 영구 저장됨.
 
-Both calls are best-effort, run on background threads, and never block the
-trading loop. Failure modes (no key, network error, malformed JSON, rate
-limit) are swallowed with a stderr line.
-
-Default model: gemini-2.0-flash (free tier: ~15 RPM / 1500 RPD — plenty for
-sub-100 trades/day + hourly regime).
+이 파일은 runner.py가 의존하는 외부 인터페이스를 유지하기 위한 어댑터:
+  analyze_trade_async(trade, snapshot)
+  detect_regime_async(snapshot, send_telegram=False, verbose_errors=False)
+  market_snapshot(df15, df1h, df4h)
+  get_last_regime()  → in-memory 마지막 레짐
 """
 from __future__ import annotations
-import json
 import os
-import threading
-import time
+import sys
 from typing import Optional
 
-import requests
+# intelligence/ 모듈은 repo root 에 있음. bot_v7/ 에서 부모 경로 추가.
+_THIS = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_THIS)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from intelligence import journal as _journal
+from intelligence import agent as _agent
 
 from . import config as cfg
 from . import notifier as tg
 
 
-_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+# Bybit 봇 식별자 (cross-bot 통계에서 사용)
+BOT_ID = os.environ.get("INTELLIGENCE_BOT_ID", "bybit_btc_d")
 
-# In-memory regime cache (latest classification). Read by /ai handler and
-# hourly report. Updated by detect_regime_async.
+
+# ── 마지막 레짐 메모리 캐시 (시간별 리포트가 참조) ─────────────
 _last_regime: dict = {}
-_last_regime_ts: float = 0.0
-
-
-def _enabled() -> bool:
-    return bool(cfg.GEMINI_API_KEY) and cfg.AI_ENABLED
-
-
-def _call_gemini(prompt: str, *, want_json: bool = False,
-                 timeout: int = 20) -> tuple[Optional[str], Optional[str]]:
-    """Single REST call. Returns (text, error_msg). On success error_msg is None."""
-    if not _enabled():
-        return None, "AI disabled"
-    url = f"{_API_BASE}/{cfg.AI_MODEL}:generateContent?key={cfg.GEMINI_API_KEY}"
-    body: dict = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 400,
-        },
-    }
-    if want_json:
-        body["generationConfig"]["responseMimeType"] = "application/json"
-    try:
-        r = requests.post(url, json=body, timeout=timeout)
-        if r.status_code != 200:
-            err = f"HTTP {r.status_code}: {r.text[:200]}"
-            print(f"[AI {err}]", flush=True)
-            return None, err
-        data = r.json()
-        cands = data.get("candidates", [])
-        if not cands:
-            err = f"no candidates: {str(data)[:200]}"
-            print(f"[AI {err}]", flush=True)
-            return None, err
-        parts = cands[0].get("content", {}).get("parts", [])
-        text = "".join(p.get("text", "") for p in parts).strip()
-        if not text:
-            return None, "empty text in response"
-        return text, None
-    except Exception as e:
-        err = f"{type(e).__name__}: {e}"
-        print(f"[AI exc] {err}", flush=True)
-        return None, err
-
-
-# ── Trade post-mortem ──────────────────────────────────────────────
-
-def _build_postmortem_prompt(trade: dict, snapshot: dict) -> str:
-    side_kr = "롱" if trade.get("side") == "Buy" else "숏"
-    pnl = trade.get("pnl", 0)
-    pnl_pct = trade.get("pnl_pct", 0) * 100
-    outcome = "수익" if pnl >= 0 else "손실"
-    reason = trade.get("reason", "?")
-    strategy = trade.get("strategy", "D")
-    tier = trade.get("tier", "?")
-    score = trade.get("score", 0)
-    lev = trade.get("leverage", 0)
-
-    return (
-        "당신은 암호화폐 트레이딩 분석가입니다. 방금 종료된 거래를 분석하세요.\n"
-        "응답은 한국어로 정확히 3줄, 각 줄 50자 이내:\n"
-        "1줄: 결과 핵심 원인 (시장 상황 기반)\n"
-        "2줄: 다음에 적용할 구체적 교훈 1가지\n"
-        "3줄: 현재 전략 유지/수정 제안 (한 단어 + 짧은 이유)\n"
-        "─────────\n"
-        f"거래: {strategy} {side_kr} {lev:.0f}x (tier={tier}, score={score:.0f})\n"
-        f"진입가 {trade.get('entry'):.2f} → 청산가 {trade.get('exit'):.2f}\n"
-        f"결과: {outcome} ${pnl:+.2f} ({pnl_pct:+.2f}%) | 청산사유: {reason}\n"
-        f"진입시 시장상태: {json.dumps(snapshot, ensure_ascii=False)}\n"
-    )
-
-
-def _postmortem_worker(trade: dict, snapshot: dict):
-    text, err = _call_gemini(_build_postmortem_prompt(trade, snapshot))
-    if not text:
-        # Background — don't spam Telegram on transient failures, just log
-        print(f"[AI postmortem skipped] {err}", flush=True)
-        return
-    pnl = trade.get("pnl", 0)
-    icon = "🧠✅" if pnl >= 0 else "🧠❌"
-    tg.send(f"{icon} AI 분석\n{text}")
-
-
-def analyze_trade_async(trade: dict, snapshot: dict):
-    """Fire-and-forget post-mortem. Safe to call even if AI disabled."""
-    if not _enabled():
-        return
-    threading.Thread(
-        target=_postmortem_worker, args=(trade, snapshot),
-        daemon=True, name="ai-postmortem",
-    ).start()
-
-
-# ── Regime detection ──────────────────────────────────────────────
-
-def _build_regime_prompt(snapshot: dict) -> str:
-    return (
-        "당신은 암호화폐 시장 분석가입니다. 현재 BTCUSDT 시장 레짐을 판단하세요.\n"
-        "JSON으로만 응답 (다른 텍스트 없이):\n"
-        '{\n'
-        '  "regime": "trending_up" | "trending_down" | "chop" | "high_vol" | "low_vol",\n'
-        '  "confidence": 0.0~1.0,\n'
-        '  "summary_kr": "한국어 1줄 요약 (50자 이내)",\n'
-        '  "suggested": "trend" | "mr" | "stand_aside",\n'
-        '  "reason_kr": "한국어 1줄 근거 (50자 이내)"\n'
-        '}\n'
-        "─────────\n"
-        f"시장 데이터: {json.dumps(snapshot, ensure_ascii=False)}\n"
-    )
-
-
-def _extract_json(text: str) -> Optional[dict]:
-    """Tolerant JSON extractor: handles raw JSON, ```json fences, prose around JSON."""
-    text = text.strip()
-    # Strip code fence
-    if text.startswith("```"):
-        lines = [ln for ln in text.splitlines() if not ln.startswith("```")]
-        text = "\n".join(lines).strip()
-    # Try direct
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    # Find first {...} block
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        try:
-            return json.loads(text[start:end + 1])
-        except Exception:
-            return None
-    return None
-
-
-def _regime_worker(snapshot: dict, send_telegram: bool, verbose_errors: bool):
-    global _last_regime, _last_regime_ts
-    text, err = _call_gemini(_build_regime_prompt(snapshot), want_json=True)
-    if not text:
-        if verbose_errors:
-            tg.send(f"⚠️ AI 호출 실패\n{err}")
-        return
-    parsed = _extract_json(text)
-    if parsed is None:
-        msg = f"JSON 파싱 실패 — 응답: {text[:200]}"
-        print(f"[AI regime parse err] {msg}", flush=True)
-        if verbose_errors:
-            tg.send(f"⚠️ AI 응답 파싱 실패\n{text[:300]}")
-        return
-    parsed["_ts"] = time.time()
-    _last_regime = parsed
-    _last_regime_ts = parsed["_ts"]
-    if send_telegram:
-        tg.send(
-            f"🧠 시장 레짐: {parsed.get('regime', '?')}"
-            f" (확신 {float(parsed.get('confidence', 0))*100:.0f}%)\n"
-            f"{parsed.get('summary_kr', '')}\n"
-            f"근거: {parsed.get('reason_kr', '')}\n"
-            f"제안: {parsed.get('suggested', '?')}"
-        )
-
-
-def detect_regime_async(snapshot: dict, *, send_telegram: bool = False,
-                        verbose_errors: bool = False):
-    if not _enabled():
-        return
-    threading.Thread(
-        target=_regime_worker, args=(snapshot, send_telegram, verbose_errors),
-        daemon=True, name="ai-regime",
-    ).start()
 
 
 def get_last_regime() -> Optional[dict]:
-    """Returns most recent regime classification (or None if none yet)."""
+    """가장 최근 레짐 결과. DB에 저장된 것 중 1건 반환 (시간별 리포트용)."""
+    rows = _journal.recent_regimes(bot_id=BOT_ID, since_seconds=86400, limit=1)
+    if rows:
+        r = rows[0]
+        return {
+            "regime": r.get("regime"),
+            "confidence": r.get("confidence", 0),
+            "summary_kr": r.get("summary"),
+            "suggested": r.get("suggested"),
+        }
     return _last_regime if _last_regime else None
 
 
-# ── Snapshot helpers ──────────────────────────────────────────────
+# ── Snapshot helper (기존 인터페이스 유지) ──────────────────────
 
 def market_snapshot(df_15m, df_1h, df_4h) -> dict:
-    """Compact dict of current indicator state. Cheap to compute, small
-    enough to fit comfortably in a Gemini prompt."""
+    """현재 지표 상태를 압축된 dict 로. AI 프롬프트에 충분히 작게 들어감."""
     def _row(df):
         if df is None or len(df) == 0:
             return {}
@@ -227,8 +70,95 @@ def market_snapshot(df_15m, df_1h, df_4h) -> dict:
             except Exception:
                 pass
         return out
-    return {
-        "15m": _row(df_15m),
-        "1h":  _row(df_1h),
-        "4h":  _row(df_4h),
+    return {"15m": _row(df_15m), "1h": _row(df_1h), "4h": _row(df_4h)}
+
+
+# ── Public API (runner.py가 호출) ────────────────────────────────
+
+def analyze_trade_async(trade: dict, snapshot: Optional[dict] = None):
+    """거래 종료 직후 호출. journal에 거래 기록 + AI 사후분석을 백그라운드로."""
+    # 1. 저널에 거래 영구 저장
+    trade_id = _journal.log_trade(
+        bot_id=BOT_ID,
+        symbol=trade.get("symbol", cfg.SYMBOL),
+        side=trade.get("side", ""),
+        entry_price=float(trade.get("entry") or 0),
+        exit_price=float(trade.get("exit") or 0),
+        size=float(trade.get("size") or 0),
+        leverage=float(trade.get("leverage") or 1.0),
+        pnl=float(trade.get("pnl") or 0),
+        pnl_pct=float(trade.get("pnl_pct") or 0),
+        reason=str(trade.get("reason", "")),
+        strategy=str(trade.get("strategy", "")),
+        tier=trade.get("tier"),
+        score=trade.get("score"),
+        entry_ts=int(trade.get("opened_ts") or 0) or None,
+        exit_ts=int(trade.get("ts") or 0) or None,
+        market_snapshot=snapshot,
+    )
+    # 2. AI 사후분석 (백그라운드)
+    _agent.analyze_trade_async(
+        bot_id=BOT_ID,
+        trade=trade,
+        snapshot=snapshot,
+        trade_id=trade_id or None,
+        send_telegram=tg.send,
+    )
+
+
+def detect_regime_async(snapshot: dict, *, send_telegram: bool = False,
+                        verbose_errors: bool = False):
+    """주기적 레짐 분류. send_telegram=True면 결과를 텔레그램으로 보냄."""
+    _agent.detect_regime_async(
+        bot_id=BOT_ID,
+        asset=cfg.SYMBOL,
+        snapshot=snapshot,
+        send_telegram=tg.send if send_telegram else None,
+        verbose_errors=verbose_errors,
+    )
+
+
+# ── /review, /propose, /lessons (텔레그램 명령) ─────────────────
+
+def weekly_review_async(verbose_errors: bool = True):
+    """본인 봇 데이터만 회고. /review 명령에서 호출."""
+    _agent.weekly_review_async(
+        bot_id=BOT_ID,
+        send_telegram=tg.send,
+        verbose_errors=verbose_errors,
+    )
+
+
+def propose_async(verbose_errors: bool = True):
+    """현재 파라미터 + 4주 데이터 → AI 제안. /propose 명령에서 호출."""
+    current = {
+        "ENTRY_MIN_SCORE": cfg.ENTRY_MIN_SCORE,
+        "MARGIN_PCT_MICRO": cfg.MARGIN_PCT_MICRO,
+        "MARGIN_PCT_PROBE": cfg.MARGIN_PCT_PROBE,
+        "MARGIN_PCT_BASE":  cfg.MARGIN_PCT_BASE,
+        "MARGIN_PCT_MID":   cfg.MARGIN_PCT_MID,
+        "MARGIN_PCT_HIGH":  cfg.MARGIN_PCT_HIGH,
+        "TP_MARGIN_MICRO":  cfg.TP_MARGIN_MICRO,
+        "TP_MARGIN_PROBE":  cfg.TP_MARGIN_PROBE,
+        "TP_MARGIN_BASE":   cfg.TP_MARGIN_BASE,
+        "TP1_MARGIN_MID":   cfg.TP1_MARGIN_MID,
+        "TRAIL_ATR_MID":    cfg.TRAIL_ATR_MID,
+        "TRAIL_ATR_HIGH":   cfg.TRAIL_ATR_HIGH,
     }
+    _agent.propose_async(
+        bot_id=BOT_ID,
+        current_params=current,
+        send_telegram=tg.send,
+        verbose_errors=verbose_errors,
+    )
+
+
+def get_recent_lessons_text(limit: int = 5) -> str:
+    """/lessons 명령용. 최근 도출된 교훈 N개 텍스트."""
+    rows = _journal.recent_lessons(bot_id=BOT_ID, limit=limit)
+    if not rows:
+        return "📚 누적 교훈 없음 (거래 누적 + 사후분석 후 표시)"
+    lines = ["📚 <b>최근 교훈</b>"]
+    for i, r in enumerate(rows, 1):
+        lines.append(f"{i}. {r.get('lesson', '?')}")
+    return "\n".join(lines)

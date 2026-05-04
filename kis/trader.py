@@ -3,6 +3,22 @@ import kis_auth as api
 import telegram
 from config import ACCOUNT_NO, IS_PAPER, DOM_POSITION_PCT, SLIPPAGE_GUARD_PCT
 
+# 공유 학습 모듈 (kis/intelligence/ 복사본). 실패해도 매매는 정상 동작.
+try:
+    from intelligence import journal as _journal, agent as _agent
+except Exception as _e:
+    _journal = _agent = None
+    print(f"[TRADER] intelligence import skip: {_e}")
+
+
+def _bot_id_for_strategy() -> str:
+    """현재 활성 국내 전략 기반 bot_id."""
+    try:
+        from config import DOM_STRATEGY_MODE
+        return f"kis_kr_{DOM_STRATEGY_MODE}"
+    except Exception:
+        return "kis_kr"
+
 
 def _acc_parts():
     parts = ACCOUNT_NO.split("-")
@@ -121,6 +137,37 @@ def sell_market(ticker: str, name: str, qty: int, buy_price: int, reason: str = 
         pnl = (current_price - buy_price) / buy_price * 100 if buy_price else 0
         print(f"[TRADER] 매도: {name}({ticker}) {pnl:+.2f}% - {reason}")
         telegram.send_sell(ticker, name, current_price, qty, pnl, reason)
+        # 공유 학습 모듈에 기록 + AI 사후분석 (best-effort, 매매 흐름 무관)
+        if _journal is not None:
+            try:
+                bot_id = _bot_id_for_strategy()
+                pnl_dollar = float((current_price - buy_price) * qty)
+                trade_id = _journal.log_trade(
+                    bot_id=bot_id, symbol=ticker,
+                    side="long",  # 한투 국내는 현금 long-only
+                    entry_price=float(buy_price),
+                    exit_price=float(current_price),
+                    size=float(qty), leverage=1.0,
+                    pnl=pnl_dollar, pnl_pct=pnl / 100.0,
+                    reason=reason, strategy="kr",
+                    extra={"name": name},
+                )
+                if _agent is not None:
+                    _agent.analyze_trade_async(
+                        bot_id=bot_id,
+                        trade={
+                            "symbol": ticker, "side": "long",
+                            "entry_price": buy_price, "exit_price": current_price,
+                            "pnl": pnl_dollar, "pnl_pct": pnl / 100.0,
+                            "reason": reason, "strategy": "kr_clenow",
+                            "leverage": 1.0,
+                        },
+                        snapshot={"market": "KR", "name": name, "qty": qty},
+                        trade_id=trade_id or None,
+                        send_telegram=lambda m: telegram.send(m, dedup_sec=30),
+                    )
+            except Exception as e:
+                print(f"[TRADER] intelligence log err: {e}")
         return True
     else:
         msg = f"매도 실패 {name}({ticker}): {data.get('msg1', '')}"
