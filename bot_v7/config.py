@@ -13,8 +13,18 @@ TG_TOKEN   = os.environ.get("TG_TOKEN", "")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "")
 TESTNET    = os.environ.get("TESTNET", "false").lower() == "true"
 
-# ─── Symbol / loop ─────────────────────────────────────────────
-SYMBOL     = os.environ.get("SYMBOL", "BTCUSDT")
+# ─── Symbols / loop ───────────────────────────────────────────
+# v12: 다중 심볼 지원. SYMBOLS 환경변수 콤마 구분.
+# 미지정시 SYMBOL (단일) 환경변수 → 그것도 없으면 BTCUSDT 단일.
+def _parse_symbols() -> list[str]:
+    env_multi = os.environ.get("SYMBOLS", "").strip()
+    if env_multi:
+        return [s.strip().upper() for s in env_multi.split(",") if s.strip()]
+    single = os.environ.get("SYMBOL", "BTCUSDT").strip().upper()
+    return [single]
+
+SYMBOLS    = _parse_symbols()
+SYMBOL     = SYMBOLS[0]  # 레거시 호환 (단일 심볼 코드 경로)
 LOOP_SEC   = int(os.environ.get("LOOP_SEC", "30"))
 POSITION_MODE = os.environ.get("POSITION_MODE", "one_way")
 
@@ -84,8 +94,14 @@ AI_MODEL        = os.environ.get("AI_MODEL", "gemini-2.0-flash")
 AI_REGIME_INTERVAL_SEC = int(os.environ.get("AI_REGIME_INTERVAL_SEC", "3600"))
 
 # ─── Symbol decimals (price + qty) ─────────────────────────────
-PRICE_DECIMALS = {"BTCUSDT": 1, "ETHUSDT": 2, "SOLUSDT": 3, "XRPUSDT": 4, "LINKUSDT": 3}
-QTY_DECIMALS   = {"BTCUSDT": 3, "ETHUSDT": 2, "SOLUSDT": 1, "XRPUSDT": 0, "LINKUSDT": 1}
+PRICE_DECIMALS = {
+    "BTCUSDT": 1, "ETHUSDT": 2, "SOLUSDT": 3,
+    "BNBUSDT": 2, "XRPUSDT": 4, "LINKUSDT": 3,
+}
+QTY_DECIMALS = {
+    "BTCUSDT": 3, "ETHUSDT": 2, "SOLUSDT": 1,
+    "BNBUSDT": 2, "XRPUSDT": 0, "LINKUSDT": 1,
+}
 
 # Disaster SL placed server-side at -2% (catches even if bot crashes)
 DISASTER_SL_PCT = 0.02

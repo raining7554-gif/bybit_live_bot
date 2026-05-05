@@ -27,8 +27,9 @@ from . import config as cfg
 from . import notifier as tg
 
 
-# Bybit 봇 식별자 (cross-bot 통계에서 사용)
-BOT_ID = os.environ.get("INTELLIGENCE_BOT_ID", "bybit_btc_d")
+# Bybit 봇 식별자 (cross-bot 통계에서 사용). v12: 다중 심볼 → 단일 ID
+# 거래 기록의 symbol 컬럼으로 심볼 구분.
+BOT_ID = os.environ.get("INTELLIGENCE_BOT_ID", "bybit_d")
 
 
 # ── 마지막 레짐 메모리 캐시 (시간별 리포트가 참조) ─────────────
@@ -106,12 +107,13 @@ def analyze_trade_async(trade: dict, snapshot: Optional[dict] = None):
     )
 
 
-def detect_regime_async(snapshot: dict, *, send_telegram: bool = False,
+def detect_regime_async(snapshot: dict, *, asset: str | None = None,
+                        send_telegram: bool = False,
                         verbose_errors: bool = False):
-    """주기적 레짐 분류. send_telegram=True면 결과를 텔레그램으로 보냄."""
+    """주기적 레짐 분류. asset 미지정시 첫 심볼 사용."""
     _agent.detect_regime_async(
         bot_id=BOT_ID,
-        asset=cfg.SYMBOL,
+        asset=asset or cfg.SYMBOL,
         snapshot=snapshot,
         send_telegram=tg.send if send_telegram else None,
         verbose_errors=verbose_errors,
