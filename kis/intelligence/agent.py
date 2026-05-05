@@ -273,6 +273,18 @@ def _build_review_prompt(stats: dict, lessons: list[str], regimes: list[dict]) -
         bn = s["n"]
         bwr = (s["wins"] / bn * 100) if bn else 0
         by_strategy_lines.append(f"  - {st}: {bn}건, 승률 {bwr:.0f}%, PnL {s['pnl']:+.2f}")
+    by_symbol_lines = []
+    # PnL 내림차순으로 — 가장 잘된 심볼 / 못한 심볼 명확히
+    sorted_syms = sorted(stats.get("by_symbol", {}).items(), key=lambda x: -x[1]["pnl"])
+    for sy, s in sorted_syms:
+        bn = s["n"]
+        bwr = (s["wins"] / bn * 100) if bn else 0
+        by_symbol_lines.append(f"  - {sy}: {bn}건, 승률 {bwr:.0f}%, PnL {s['pnl']:+.2f}")
+    by_tier_lines = []
+    for ti, s in stats.get("by_tier", {}).items():
+        bn = s["n"]
+        bwr = (s["wins"] / bn * 100) if bn else 0
+        by_tier_lines.append(f"  - {ti}: {bn}건, 승률 {bwr:.0f}%, PnL {s['pnl']:+.2f}")
     by_reason_str = ", ".join(f"{k}={v}" for k, v in
                               sorted(stats.get("by_reason", {}).items(),
                                      key=lambda x: -x[1])[:6])
@@ -292,16 +304,19 @@ def _build_review_prompt(stats: dict, lessons: list[str], regimes: list[dict]) -
 
     return (
         "당신은 트레이딩 코치입니다. 지난 7일 거래 데이터를 분석하세요.\n"
-        "응답은 한국어로 정확히 5줄, 각 줄 60자 이내:\n"
+        "응답은 한국어로 정확히 6줄, 각 줄 60자 이내:\n"
         "1줄: 지난주 핵심 패턴 1개 (데이터 기반)\n"
-        "2줄: 가장 자주 진 상황 (구체적 조건)\n"
-        "3줄: 가장 잘된 상황\n"
-        "4줄: 다음주 주의점 1가지\n"
-        "5줄: 봇별/전략별 성과 비교 한 줄 평\n"
+        "2줄: 가장 잘된 심볼/전략 + 이유\n"
+        "3줄: 가장 부진한 심볼/전략 + 이유 (제거 고려?)\n"
+        "4줄: tier별 효율 — 어느 tier 가 가장 수익적이었나\n"
+        "5줄: 다음주 주의점 1가지\n"
+        "6줄: 봇별 성과 한 줄 평\n"
         "─────────\n"
         f"전체: {n}건, 승률 {wr:.1f}%, 총 PnL {pnl:+.2f}\n"
-        f"봇별:\n" + "\n".join(by_bot_lines) + "\n"
-        f"전략별:\n" + "\n".join(by_strategy_lines) + "\n"
+        f"심볼별 (PnL 순):\n" + ("\n".join(by_symbol_lines) or "  (없음)") + "\n"
+        f"tier별:\n" + ("\n".join(by_tier_lines) or "  (없음)") + "\n"
+        f"전략별:\n" + ("\n".join(by_strategy_lines) or "  (없음)") + "\n"
+        f"봇별:\n" + ("\n".join(by_bot_lines) or "  (없음)") + "\n"
         f"청산사유 분포: {by_reason_str}"
         + lessons_block
         + regime_block

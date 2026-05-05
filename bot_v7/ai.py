@@ -164,3 +164,10 @@ def get_recent_lessons_text(limit: int = 5) -> str:
     for i, r in enumerate(rows, 1):
         lines.append(f"{i}. {r.get('lesson', '?')}")
     return "\n".join(lines)
+
+
+def get_symbol_stats_text(days: int = 7) -> str:
+    """/symbols 명령용. 심볼별/tier별 누적 성과 텍스트."""
+    return _journal.format_symbol_stats(
+        bot_id=BOT_ID, since_seconds=days * 86400,
+    )

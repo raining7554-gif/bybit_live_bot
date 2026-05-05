@@ -270,7 +270,7 @@ def main():
         f"국내 진입창: {DOM_SCAN_START}~{DOM_SCAN_END}\n"
         f"해외 진입창: {OS_SCAN_TIME_START}~{OS_SCAN_TIME_END} KST\n"
         f"현재 {hhmm()} KST\n"
-        f"{ai_label} | 명령: /review /lessons /propose"
+        f"{ai_label} | 명령: /review /lessons /propose /symbols"
         + (f"\n\n{health_report}" if health_report else "")
     )
 
@@ -354,10 +354,23 @@ def main():
             verbose_errors=True,
         )
 
+    def cmd_symbols():
+        if _journal is None:
+            telegram.send("intelligence 모듈 미로드")
+            return
+        # 7일 + 30일 두 윈도우로 봇별 출력
+        for days in (7, 30):
+            for bid in _all_kis_bot_ids():
+                msg = _journal.format_symbol_stats(
+                    bot_id=bid, since_seconds=days * 86400,
+                )
+                telegram.send(msg, dedup_sec=60)
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
         "/propose": cmd_propose,
+        "/symbols": cmd_symbols,
     }
     last_weekly_review_kst_date = ""
 

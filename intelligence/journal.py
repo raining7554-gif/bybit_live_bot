@@ -249,10 +249,14 @@ def trade_stats(*, bot_id: Optional[str] = None,
     by_strategy: dict[str, dict] = {}
     by_reason: dict[str, int] = {}
     by_bot: dict[str, dict] = {}
+    by_symbol: dict[str, dict] = {}
+    by_tier: dict[str, dict] = {}
     for t in trades:
         s = t.get("strategy") or "?"
         r = t.get("reason") or "?"
         b = t.get("bot_id") or "?"
+        sy = t.get("symbol") or "?"
+        ti = t.get("tier") or "?"
         ss = by_strategy.setdefault(s, {"n": 0, "wins": 0, "pnl": 0.0})
         ss["n"] += 1
         ss["wins"] += 1 if t["pnl"] >= 0 else 0
@@ -262,6 +266,14 @@ def trade_stats(*, bot_id: Optional[str] = None,
         bb["n"] += 1
         bb["wins"] += 1 if t["pnl"] >= 0 else 0
         bb["pnl"] += t["pnl"]
+        sym = by_symbol.setdefault(sy, {"n": 0, "wins": 0, "pnl": 0.0})
+        sym["n"] += 1
+        sym["wins"] += 1 if t["pnl"] >= 0 else 0
+        sym["pnl"] += t["pnl"]
+        tt = by_tier.setdefault(ti, {"n": 0, "wins": 0, "pnl": 0.0})
+        tt["n"] += 1
+        tt["wins"] += 1 if t["pnl"] >= 0 else 0
+        tt["pnl"] += t["pnl"]
 
     return {
         "n": n, "wins": wins, "losses": losses,
@@ -270,7 +282,52 @@ def trade_stats(*, bot_id: Optional[str] = None,
         "by_strategy": by_strategy,
         "by_reason": by_reason,
         "by_bot": by_bot,
+        "by_symbol": by_symbol,
+        "by_tier": by_tier,
     }
+
+
+def format_symbol_stats(*, bot_id: Optional[str] = None,
+                        since_seconds: int = 7 * 86400) -> str:
+    """심볼별 성과를 텔레그램용 텍스트로 포매팅."""
+    stats = trade_stats(bot_id=bot_id, since_seconds=since_seconds)
+    n = stats.get("n", 0)
+    if n == 0:
+        days = since_seconds // 86400
+        scope = bot_id or "all"
+        return f"📊 {scope}: 지난 {days}일 거래 없음"
+
+    days = since_seconds // 86400
+    scope = bot_id or "all"
+    lines = [f"📊 <b>심볼별 성과</b> ({scope}, 지난 {days}일)",
+             f"전체: {n}건 / 승률 {stats['win_rate']*100:.0f}% / "
+             f"PnL {stats['total_pnl']:+.2f}",
+             "─────────"]
+    by_sym = stats.get("by_symbol", {})
+    # PnL 내림차순
+    sorted_syms = sorted(by_sym.items(), key=lambda x: -x[1]["pnl"])
+    for sym, s in sorted_syms:
+        sn = s["n"]
+        sw = s["wins"]
+        wr = (sw / sn * 100) if sn > 0 else 0
+        icon = "🟢" if s["pnl"] > 0 else ("🔴" if s["pnl"] < 0 else "⚪")
+        lines.append(f"{icon} {sym}: {sw}W/{sn-sw}L "
+                     f"({wr:.0f}%) PnL {s['pnl']:+.2f}")
+
+    by_tier = stats.get("by_tier", {})
+    if by_tier:
+        lines.append("─────────")
+        lines.append("<b>tier별</b>")
+        tier_order = ["high", "mid", "base", "probe", "micro", "mr", "?"]
+        for ti in tier_order:
+            if ti not in by_tier:
+                continue
+            t = by_tier[ti]
+            tn = t["n"]
+            tw = t["wins"]
+            wr = (tw / tn * 100) if tn > 0 else 0
+            lines.append(f"  {ti}: {tw}W/{tn-tw}L ({wr:.0f}%) {t['pnl']:+.2f}")
+    return "\n".join(lines)
 
 
 def latest_proposals(*, bot_id: Optional[str] = None,
