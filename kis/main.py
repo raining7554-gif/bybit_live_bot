@@ -114,7 +114,8 @@ def get_balance_info() -> dict:
                 "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
             },
         )
-        if data.get("rt_cd") == "0":
+        rt_cd = data.get("rt_cd")
+        if rt_cd == "0":
             o = data.get("output2", [{}])[0]
             return {
                 "total_eval": int(o.get("tot_evlu_amt", 0)),
@@ -123,6 +124,13 @@ def get_balance_info() -> dict:
                 "eval_profit": int(o.get("evlu_pfls_smtl_amt", 0)),
                 "profit_rate": float(o.get("asst_icdc_erng_rt", 0)),
             }
+        # v3.6: 잔고 0 진단용 — 응답 본체를 로그에 남김
+        msg1 = data.get("msg1", "")
+        msg_cd = data.get("msg_cd", "")
+        print(f"[BALANCE] 잔고 조회 실패 rt_cd={rt_cd} msg_cd={msg_cd} "
+              f"msg={msg1[:200]}")
+        print(f"[BALANCE] CANO={acc_no} ACNT_PRDT_CD={acc_prod} "
+              f"TR_ID={tr_id} IS_PAPER={IS_PAPER}")
     except Exception as e:
         print(f"[BALANCE] 오류: {e}")
     return {}

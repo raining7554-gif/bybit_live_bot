@@ -114,16 +114,24 @@ def get_overseas_balance() -> dict:
                 "INQR_DVSN_CD": "00",
             },
         )
-        if data.get("rt_cd") == "0":
+        rt_cd = data.get("rt_cd")
+        if rt_cd == "0":
             o3 = data.get("output3", {})
             raw_balance = o3
             total_eval_usd = _safe_float(o3.get("tot_asst_amt"))
-            # fallback: 외화예치금
             available_usd = (
                 _safe_float(o3.get("ord_psbl_frcr_amt"))
                 or _safe_float(o3.get("frcr_dncl_amt1"))
                 or _safe_float(o3.get("frcr_dncl_amt"))
             )
+        else:
+            # v3.6: 진단 로그 — 잔고 조회 실패시 응답 코드/메시지/계좌 정보
+            msg1 = data.get("msg1", "")
+            msg_cd = data.get("msg_cd", "")
+            print(f"[OS_TRADER] 잔고 실패 rt_cd={rt_cd} msg_cd={msg_cd} "
+                  f"msg={msg1[:200]}")
+            print(f"[OS_TRADER] CANO={acc_no} ACNT_PRDT_CD={acc_prod} "
+                  f"IS_PAPER={IS_PAPER}")
     except Exception as e:
         print(f"[OS_TRADER] 잔고 조회 오류: {e}")
 
