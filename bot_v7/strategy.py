@@ -247,10 +247,16 @@ def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low,
 
 def calc_qty(equity: float, leverage: float, price: float, symbol: str,
              tier: str = "base") -> float:
-    """v9 sizing: notional = equity × margin_pct(tier) × leverage."""
+    """v12 sizing: notional = equity × (margin_pct(tier) / N_symbols) × leverage.
+
+    N_symbols 분할: 다중 심볼 운영 시 같은 마진%를 N등분 → 총 노출 동일.
+    예) high tier 80% × 단일 = 단일 심볼 80%
+        high tier 80% × 5종 = 심볼당 16% (총 80%)
+    """
     if equity <= 0 or price <= 0 or leverage <= 0:
         return 0.0
-    margin_pct = _margin_pct_for_tier(tier)
+    n_symbols = max(len(cfg.SYMBOLS), 1)
+    margin_pct = _margin_pct_for_tier(tier) / n_symbols
     margin = equity * margin_pct * cfg.CAPITAL_FRACTION
     notional = margin * leverage
     qty = notional / price
