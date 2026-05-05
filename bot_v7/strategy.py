@@ -276,8 +276,10 @@ def calc_qty(equity: float, leverage: float, price: float, symbol: str,
     # 글로벌 캡 적용 — 다른 활성 포지션이 차지한 마진 차감
     available = max(0.0, cfg.MAX_TOTAL_MARGIN - active_margin_used)
     margin_pct = min(desired_margin, available)
-    if margin_pct < 0.05:
-        return 0.0, 0.0  # 5% 미만이면 의미 없음 → skip
+    # v13.1: 10% 미만이면 의미없을 뿐 아니라 Bybit 수수료/IM 요구치
+    # 못 맞춰서 110007 'ab not enough' 발생 가능 → 사전 차단
+    if margin_pct < 0.10:
+        return 0.0, 0.0
 
     margin = equity * margin_pct * cfg.CAPITAL_FRACTION
     notional = margin * leverage

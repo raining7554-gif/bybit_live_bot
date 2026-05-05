@@ -44,10 +44,11 @@ MARGIN_PCT       = float(os.environ.get("MARGIN_PCT", "0.50"))
 CAPITAL_FRACTION = float(os.environ.get("CAPITAL_FRACTION", "1.00"))
 
 # v13: 전체 활성 포지션 마진 합계 한도. 1.0 = 잔고 100%.
-# 1.0 = 기본 (단일 high 진입 후 작은 추가 신호만 가능)
-# 1.5 = 공격적 (high 2개까지 가능, 단일 -2% → -30% 손실 가능성)
-# 0.8 = 보수 (단일 high 진입시 추가 신호 거의 막힘)
-MAX_TOTAL_MARGIN = float(os.environ.get("MAX_TOTAL_MARGIN", "1.0"))
+# v13.1: 기본 0.90 (10% 버퍼) — Bybit 가 수수료/maintenance margin 위해
+#         실제 가용 잔고를 entry 마진보다 더 빡빡하게 잡음. 100% 까지 채우면
+#         110007 'ab not enough' 에러 자주 남.
+# 0.85 = 보수 / 0.90 = 권장 / 1.00 = 빡빡 / 1.50 = 공격적 (위험)
+MAX_TOTAL_MARGIN = float(os.environ.get("MAX_TOTAL_MARGIN", "0.90"))
 
 # v13: 점수 → 마진 스케일링 곡선 (margin = tier × (score/100)^SCORE_EXP)
 # 1.0 = 선형 (직관적), 1.5 = 가파름, 2.0 = 매우 가파름

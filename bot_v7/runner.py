@@ -213,7 +213,10 @@ def _try_open(symbol: str, equity: float, signal: dict,
 
     ok, oid = ex.place_market_order(symbol, side, qty, disaster_sl)
     if not ok:
-        tg.send(f"⚠️ [{_short(symbol)}] 진입 실패: {oid[:200]}")
+        # v13.1: 진입 실패시 같은 심볼 cooldown 활성화 — 같은 신호로 매 루프
+        # 재시도해서 텔레그램 폭주 방지. 90분 후 자동 해제.
+        _last_loss_ts[symbol] = time.time()
+        tg.send(f"⚠️ [{_short(symbol)}] 진입 실패 (90분 cooldown): {oid[:150]}")
         return
 
     strat_stop = signal["stop_price"]
