@@ -427,6 +427,11 @@ def _setup_handlers():
     def lessons_cmd():
         tg.send(ai.get_recent_lessons_text(limit=8))
 
+    def symbols_cmd():
+        # 7일 + 30일 두 개 윈도우로 출력
+        tg.send(ai.get_symbol_stats_text(days=7))
+        tg.send(ai.get_symbol_stats_text(days=30))
+
     return {
         "/status":  status,
         "/score":   score_cmd,
@@ -434,6 +439,7 @@ def _setup_handlers():
         "/review":  review_cmd,
         "/propose": propose_cmd,
         "/lessons": lessons_cmd,
+        "/symbols": symbols_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
@@ -590,7 +596,7 @@ def main():
         f"━ 안전 ━\n"
         f"자동 정지 OFF (수동 /halt)\n"
         f"서버사이드 -2% SL 부착\n"
-        f"명령: /status /score /ai /review /propose /lessons /halt /resume\n"
+        f"명령: /status /score /ai /review /propose /lessons /symbols /halt /resume\n"
         f"⏰ KST 정각 리포트\n"
         f"🧠 AI: {'ON (' + cfg.AI_MODEL + ')' if (cfg.AI_ENABLED and cfg.GEMINI_API_KEY) else 'OFF'}"
     )
