@@ -74,9 +74,19 @@ def is_os_market_hours() -> bool:
     return t >= "22:30" or t <= "06:00"
 
 
+def _in_window(t: str, start: str, end: str) -> bool:
+    """KST 시간 윈도우 체크. start > end 이면 자정 넘어가는 윈도우로 판정.
+
+    예) start='22:30', end='05:30' → 22:30~23:59 또는 00:00~05:30 = True
+    """
+    if start <= end:
+        return start <= t <= end
+    return t >= start or t <= end
+
+
 def is_os_scan_time() -> bool:
-    t = hhmm()
-    return OS_SCAN_TIME_START <= t <= OS_SCAN_TIME_END
+    """v3.3: 자정 넘어가는 진입창 지원."""
+    return _in_window(hhmm(), OS_SCAN_TIME_START, OS_SCAN_TIME_END)
 
 
 def is_os_eod_check() -> bool:

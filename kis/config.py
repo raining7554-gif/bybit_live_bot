@@ -41,9 +41,11 @@ DOM_MAX_HOLD_DAYS  = 10             # 최대 10영업일
 OS_ASSUMED_SEED_USD = 350           # 약 50만원
 
 # 운영 시간 (KST 기준, 서머타임 고려 않고 넉넉히)
-OS_SCAN_TIME_START  = "22:30"       # 미장 개장 직후 1회만 진입
-OS_SCAN_TIME_END    = "23:30"
-OS_EOD_CHECK        = "05:45"       # 미장 종료 직전 일봉 청산 체크
+# v3.3: 진입창 풀 확장 — 기본 22:30 (개장) ~ 05:30 (종료 직전).
+# is_os_scan_time() 가 자정 넘어가는 윈도우(START > END) 자동 감지.
+OS_SCAN_TIME_START  = os.environ.get("OS_SCAN_TIME_START", "22:30")
+OS_SCAN_TIME_END    = os.environ.get("OS_SCAN_TIME_END", "05:30")
+OS_EOD_CHECK        = os.environ.get("OS_EOD_CHECK", "05:45")  # 미장 종료 직전 일봉 청산 체크
 
 # 포지션
 OS_MAX_POSITIONS  = 2               # $350 시드면 2종목이 현실적
