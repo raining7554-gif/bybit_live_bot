@@ -246,22 +246,44 @@ def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low,
 
 
 def calc_qty(equity: float, leverage: float, price: float, symbol: str,
-             tier: str = "base") -> float:
-    """v12 sizing: notional = equity × (margin_pct(tier) / N_symbols) × leverage.
+             tier: str = "base", score: float | None = None,
+             active_margin_used: float = 0.0) -> tuple[float, float]:
+    """v13 sizing: 점수 기반 + 전체 마진 글로벌 캡.
 
-    N_symbols 분할: 다중 심볼 운영 시 같은 마진%를 N등분 → 총 노출 동일.
-    예) high tier 80% × 단일 = 단일 심볼 80%
-        high tier 80% × 5종 = 심볼당 16% (총 80%)
+    공식:
+        margin_pct = tier_margin × (score/100)^SCORE_EXP
+        margin_pct = min(margin_pct, MAX_TOTAL_MARGIN - active_margin_used)
+        notional = equity × margin_pct × leverage
+
+    Returns:
+        (qty, margin_pct) — 둘 다 0이면 진입 skip.
+
+    이전 v12 (1/N 분할) 와 차이:
+      - 단일 신호 시 full tier 마진 사용 → 사이즈 약 5배 ↑
+      - 동시 진입 시 글로벌 캡으로 총 노출 제한
     """
     if equity <= 0 or price <= 0 or leverage <= 0:
-        return 0.0
-    n_symbols = max(len(cfg.SYMBOLS), 1)
-    margin_pct = _margin_pct_for_tier(tier) / n_symbols
+        return 0.0, 0.0
+
+    base_margin = _margin_pct_for_tier(tier)
+    # 점수 비례 미세조정 (None이면 1.0 = full tier margin, MR 등 score 없는 신호용)
+    if score and score > 0:
+        score_factor = max(0.0, min(1.0, (score / 100.0) ** cfg.SCORE_EXP))
+    else:
+        score_factor = 1.0
+    desired_margin = base_margin * score_factor
+
+    # 글로벌 캡 적용 — 다른 활성 포지션이 차지한 마진 차감
+    available = max(0.0, cfg.MAX_TOTAL_MARGIN - active_margin_used)
+    margin_pct = min(desired_margin, available)
+    if margin_pct < 0.05:
+        return 0.0, 0.0  # 5% 미만이면 의미 없음 → skip
+
     margin = equity * margin_pct * cfg.CAPITAL_FRACTION
     notional = margin * leverage
     qty = notional / price
     decimals = cfg.QTY_DECIMALS.get(symbol, 2)
     qty = round(qty, decimals)
     if qty * price < 5.0:
-        return 0.0
-    return qty
+        return 0.0, 0.0
+    return qty, margin_pct

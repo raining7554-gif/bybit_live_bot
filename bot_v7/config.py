@@ -28,19 +28,30 @@ SYMBOL     = SYMBOLS[0]  # 레거시 호환 (단일 심볼 코드 경로)
 LOOP_SEC   = int(os.environ.get("LOOP_SEC", "30"))
 POSITION_MODE = os.environ.get("POSITION_MODE", "one_way")
 
-# ─── Capital / sizing (v9: per-tier differential margin) ──────
-# Each D-tier gets its own margin allocation (Option C aggressive).
-# Notional per trade = margin% × leverage × equity.
+# ─── Capital / sizing (v13: score-based, global cap, no /N split) ──
+# v13 변경: 1/N 분할 제거. 각 심볼이 tier의 full 마진을 사용하되,
+# 전체 활성 포지션 합산 마진이 MAX_TOTAL_MARGIN 이하로 유지.
+# score_factor = (score/100)^SCORE_EXP 로 강한 신호일수록 큰 사이즈.
 MARGIN_PCT_MICRO = 0.30   # 3x  → notional 90%   equity
 MARGIN_PCT_PROBE = 0.40   # 5x  → notional 200%
 MARGIN_PCT_BASE  = 0.50   # 10x → notional 500%
 MARGIN_PCT_MID   = 0.65   # 15x → notional 975%
 MARGIN_PCT_HIGH  = 0.80   # 20x → notional 1600%
-MARGIN_PCT_MR    = 0.50   # MR 5x → notional 250% (unchanged)
-# Legacy single-margin used only as fallback / display
+MARGIN_PCT_MR    = 0.50   # MR 5x → notional 250%
+# Legacy single-margin (display/fallback)
 MARGIN_PCT       = float(os.environ.get("MARGIN_PCT", "0.50"))
-# Max equity actually used by the bot (rest sits idle as buffer).
+# 봇이 실제로 사용하는 자본 비율 (나머지는 buffer)
 CAPITAL_FRACTION = float(os.environ.get("CAPITAL_FRACTION", "1.00"))
+
+# v13: 전체 활성 포지션 마진 합계 한도. 1.0 = 잔고 100%.
+# 1.0 = 기본 (단일 high 진입 후 작은 추가 신호만 가능)
+# 1.5 = 공격적 (high 2개까지 가능, 단일 -2% → -30% 손실 가능성)
+# 0.8 = 보수 (단일 high 진입시 추가 신호 거의 막힘)
+MAX_TOTAL_MARGIN = float(os.environ.get("MAX_TOTAL_MARGIN", "1.0"))
+
+# v13: 점수 → 마진 스케일링 곡선 (margin = tier × (score/100)^SCORE_EXP)
+# 1.0 = 선형 (직관적), 1.5 = 가파름, 2.0 = 매우 가파름
+SCORE_EXP = float(os.environ.get("SCORE_EXP", "1.0"))
 
 # ─── Strategy D v9 (5-tier aggressive + per-tier exit + per-tier margin) ──
 ENTRY_MIN_SCORE   = 55.0

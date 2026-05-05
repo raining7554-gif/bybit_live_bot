@@ -1,7 +1,9 @@
-"""v12 main loop — multi-symbol Strategy D + MR.
+"""v13 main loop — multi-symbol Strategy D + MR (점수기반 사이징).
 
-심볼별 독립 포지션. 같은 D 전략을 N개 심볼에 적용. calc_qty 가 마진을
-N등분 하므로 총 노출은 단일 심볼 시절과 동일.
+v12 의 1/N 마진 분할 → v13 점수기반 + 글로벌 마진 캡으로 변경.
+- 단일 신호: full tier 마진 사용 (예: high tier 80%)
+- 점수 비례 미세조정: margin = tier × (score/100)^SCORE_EXP
+- 글로벌 캡 (MAX_TOTAL_MARGIN): 모든 활성 포지션 합계 ≤ 한도
 """
 from __future__ import annotations
 import json
@@ -83,7 +85,7 @@ def _today_pnl(equity: float) -> tuple[float, float]:
 def _build_status_text(equity: float) -> str:
     today_d, today_pct = _today_pnl(equity)
     lines = [
-        f"📊 v12 상태 ({_now_str()})",
+        f"📊 v13 상태 ({_now_str()})",
         f"잔고: ${equity:,.2f} (오늘 ${today_d:+.2f} / {today_pct*100:+.2f}%)",
     ]
     if _positions:
@@ -189,9 +191,23 @@ def _try_open(symbol: str, equity: float, signal: dict,
         return
 
     sizing_tier = "mr" if is_mr else signal.get("tier", "base")
-    qty = strat.calc_qty(equity, lev, entry_price, symbol, tier=sizing_tier)
+    score = signal.get("score") or 0
+
+    # v13: 다른 활성 포지션이 사용 중인 마진 합계 → 캡 계산용
+    active_margin = sum(
+        p.get("margin_pct", 0.0) for s, p in _positions.items() if s != symbol
+    )
+    qty, margin_pct = strat.calc_qty(
+        equity, lev, entry_price, symbol,
+        tier=sizing_tier, score=score, active_margin_used=active_margin,
+    )
     if qty <= 0:
+        # 캡 도달했거나 사이즈 너무 작아서 skip
+        if active_margin >= cfg.MAX_TOTAL_MARGIN * 0.95:
+            tg.send(f"⏸️ [{_short(symbol)}] 마진 캡 도달 — 진입 skip "
+                    f"(사용 {active_margin*100:.0f}% / 한도 {cfg.MAX_TOTAL_MARGIN*100:.0f}%)")
         return
+
     disaster_sl = entry_price * (1 - cfg.DISASTER_SL_PCT) if side == "Buy" \
                   else entry_price * (1 + cfg.DISASTER_SL_PCT)
 
@@ -207,7 +223,7 @@ def _try_open(symbol: str, equity: float, signal: dict,
 
     _positions[symbol] = {
         "side": side, "entry": entry_price, "size": qty,
-        "leverage": lev, "score": signal["score"],
+        "leverage": lev, "score": score,
         "init_stop": signal["stop_price"], "current_stop": final_stop,
         "be_done": False, "scale_done": False, "atr_15m": signal["atr_15m"],
         "tp_price": signal.get("tp_price"),
@@ -217,13 +233,16 @@ def _try_open(symbol: str, equity: float, signal: dict,
         "opened_ts": time.time(),
         "entry_snapshot": snapshot or {},
         "symbol": symbol,
+        "margin_pct": margin_pct,  # v13: 캡 계산용
     }
     st.save_all(_positions)
 
     side_kr = "롱" if side == "Buy" else "숏"
     icon = "〰️ MR" if is_mr else "📈 D"
+    notional = qty * entry_price
     tg.send(
-        f"{icon} [{_short(symbol)}] {side_kr} 진입 ({lev:.0f}x)\n"
+        f"{icon} [{_short(symbol)}] {side_kr} 진입 ({lev:.0f}x) score={score:.0f}\n"
+        f"마진 {margin_pct*100:.1f}% (notional ${notional:,.0f})\n"
         f"잔고: ${equity:,.2f}  진입가: ${entry_price:,.2f}"
     )
 
@@ -513,7 +532,7 @@ def _maybe_hourly_report(equity: float):
 def main():
     global _safety, _loop_count
 
-    print(f"[v12 boot] stage 1: env check", flush=True)
+    print(f"[v13 boot] stage 1: env check", flush=True)
     print(f"  BYBIT_API_KEY: {'set' if cfg.API_KEY else 'MISSING'}", flush=True)
     print(f"  TG_TOKEN: {'set' if cfg.TG_TOKEN else 'MISSING'}", flush=True)
     print(f"  SYMBOLS={cfg.SYMBOLS} TESTNET={cfg.TESTNET}", flush=True)
@@ -525,11 +544,11 @@ def main():
         sys.exit(1)
 
     print(f"╔════════════════════════════════════════╗", flush=True)
-    print(f"║  Bybit Bot v12 — Multi-Symbol Strategy ║", flush=True)
+    print(f"║  Bybit Bot v13 — Score-Based Sizing    ║", flush=True)
     print(f"║  symbols={','.join(cfg.SYMBOLS)}", flush=True)
     print(f"╚════════════════════════════════════════╝", flush=True)
 
-    print(f"[v12 boot] stage 2: exchange init", flush=True)
+    print(f"[v13 boot] stage 2: exchange init", flush=True)
     try:
         ex.init()
     except Exception as e:
@@ -537,11 +556,11 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    print(f"[v12 boot] stage 3: state restore", flush=True)
+    print(f"[v13 boot] stage 3: state restore", flush=True)
     _safety = safety.load()
     _restore_from_state()
 
-    print(f"[v12 boot] stage 4: API smoke test", flush=True)
+    print(f"[v13 boot] stage 4: API smoke test", flush=True)
     eq0 = ex.get_balance()
     print(f"  balance=${eq0:.2f}", flush=True)
     for sym in cfg.SYMBOLS:
@@ -554,17 +573,20 @@ def main():
     n = len(cfg.SYMBOLS)
     sym_label = ", ".join(_short(s) for s in cfg.SYMBOLS)
     tg.send(
-        f"🚀 v12 시작 — 다중 심볼 ({n}종)\n"
+        f"🚀 v13 시작 — 점수기반 사이징 ({n}종)\n"
         f"봇: {bot_label}\n"
         f"심볼: {sym_label} | 잔고: ${eq0:,.2f}\n"
-        f"━ D 전략 (점수→tier별 차등) ━\n"
-        f"  심볼당 마진 = 단일 모드 / {n} (총 노출 동일)\n"
-        f"  55-59 → 3x  / probe / TP +2%\n"
-        f"  60-69 → 5x  / probe / TP +3%\n"
-        f"  70-79 → 10x / base  / TP +6%\n"
-        f"  80-89 → 15x / mid   / TP1 +10% → 3.0×ATR 트레일\n"
-        f"  90+   → 20x / high  / 4.0×ATR 트레일\n"
-        f"━ MR (평균회귀) — 5x / BB 중간선 TP\n"
+        f"━ D 전략 (점수×tier 마진) ━\n"
+        f"  margin = tier × (score/100)^{cfg.SCORE_EXP:.1f}\n"
+        f"  55-59 → 3x  / TP +2% / 마진 ~16~28%\n"
+        f"  60-69 → 5x  / TP +3% / 마진 ~24~36%\n"
+        f"  70-79 → 10x / TP +6% / 마진 ~35~48%\n"
+        f"  80-89 → 15x / TP1+10% → 3.0×ATR / 마진 ~52~62%\n"
+        f"  90+   → 20x / 4.0×ATR / 마진 ~72~80%\n"
+        f"━ 글로벌 캡 ━\n"
+        f"  활성 포지션 합계 마진 ≤ {cfg.MAX_TOTAL_MARGIN*100:.0f}%\n"
+        f"  캡 도달시 신규 신호 skip (텔레그램 알림)\n"
+        f"━ MR — 5x / BB 중간선 TP / 마진 50%\n"
         f"━ 안전 ━\n"
         f"자동 정지 OFF (수동 /halt)\n"
         f"서버사이드 -2% SL 부착\n"
@@ -572,7 +594,7 @@ def main():
         f"⏰ KST 정각 리포트\n"
         f"🧠 AI: {'ON (' + cfg.AI_MODEL + ')' if (cfg.AI_ENABLED and cfg.GEMINI_API_KEY) else 'OFF'}"
     )
-    print(f"[v12 boot] startup complete — entering main loop", flush=True)
+    print(f"[v13 boot] startup complete — entering main loop", flush=True)
 
     while True:
         try:
@@ -637,10 +659,10 @@ def main():
             time.sleep(cfg.LOOP_SEC)
 
         except KeyboardInterrupt:
-            tg.send("🛑 v12 수동 종료")
+            tg.send("🛑 v13 수동 종료")
             sys.exit(0)
         except Exception as e:
             err = traceback.format_exc()
             print(f"[loop err] {e}\n{err}", flush=True)
-            tg.send(f"⚠️ v12 오류\n{str(e)[:300]}")
+            tg.send(f"⚠️ v13 오류\n{str(e)[:300]}")
             time.sleep(60)
