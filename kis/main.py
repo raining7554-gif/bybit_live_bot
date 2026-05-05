@@ -162,20 +162,20 @@ def send_summary(dom_pos, os_pos, trade_count):
 # 데이터 자가진단 (시작시 1회)
 # ═══════════════════════════════════════════════════════
 def _data_health_check() -> dict:
-    """KIS 일봉 API가 MA200/MA50 계산에 필요한 만큼 받아오는지 검증.
+    """KIS 일봉 API + 잔고가 거래 가능 상태인지 검증.
 
-    - KOSPI 지수 (clenow 체제 판정용)
-    - 해외 벤치마크 (각 ETF의 leveraged regime 판정용)
+    검증 항목:
+      - DOM_STRATEGY_MODE=clenow → KOSPI 220일
+      - OS_STRATEGY_MODE=leveraged → 각 ETF 슬리브 벤치마크
+      - 항상 → KRW + USD 잔고 (환전 여부 확인)
 
-    리턴: {symbol: int(받은 일수) | str(에러 메시지)}
+    리턴: {symbol|tag: int(일수)|str(에러)|str("$X.XX") }
     """
     results: dict = {}
 
     if DOM_STRATEGY_MODE == "clenow":
         try:
             from strategy_clenow_kr import get_kr_daily
-            # KIS itemchartprice 엔드포인트가 지수("U") 미지원이라
-            # KODEX 200 (069500) ETF로 KOSPI 200 근사. 실패 시 삼성전자 fallback.
             kospi = get_kr_daily("069500", count=220, market_code="J")
             if len(kospi) < 200:
                 kospi = get_kr_daily("005930", count=220, market_code="J")
@@ -200,6 +200,24 @@ def _data_health_check() -> dict:
         except Exception as e:
             results["US_BENCH"] = f"ERR: {type(e).__name__}: {str(e)[:80]}"
 
+    # v3.5: 잔고 검증 — 환전 여부 확인용
+    try:
+        krw_bal = get_balance_info()
+        krw = krw_bal.get("total_eval", 0) if krw_bal else 0
+        results["KRW"] = f"₩{krw:,}"
+    except Exception as e:
+        results["KRW"] = f"ERR: {type(e).__name__}"
+    try:
+        import trader_overseas as _ot
+        os_bal = _ot.get_overseas_balance()
+        avail = os_bal.get("available_usd", 0)
+        total = os_bal.get("total_eval_usd", 0)
+        results["USD가용"] = f"${avail:.2f}"
+        if avail < 50 and total > 0:
+            results["USD가용"] += " ⚠️환전필요"
+    except Exception as e:
+        results["USD가용"] = f"ERR: {type(e).__name__}"
+
     return results
 
 
@@ -216,9 +234,12 @@ def _format_health_report(results: dict) -> str:
             lines.append(f"  {k}: {v}일 {icon}")
             if not ok:
                 all_ok = False
-        else:
+        elif isinstance(v, str) and v.startswith("ERR"):
             lines.append(f"  {k}: ❌ {v}")
             all_ok = False
+        else:
+            # KRW / USD 같은 표시값
+            lines.append(f"  {k}: {v}")
     if all_ok:
         lines.append("→ 모든 데이터 정상")
     else:
