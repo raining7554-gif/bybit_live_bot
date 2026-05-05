@@ -154,14 +154,16 @@ def check_os_entry(ticker: str, exchange: str, name: str = "") -> tuple:
         return False, f"MA50({ma50:.1f})≤MA200({ma200:.1f})", metrics
     if today_close <= ma20:
         return False, f"종가≤MA20", metrics
-    if not (50 <= rsi <= 70):
+    # v3.4: RSI 범위 50~70 → 50~75 (약간 과열도 허용)
+    if not (50 <= rsi <= 75):
         return False, f"RSI {rsi:.0f} 범위밖", metrics
-    if avg_vol20 > 0 and today_vol < avg_vol20 * 1.3:
+    # v3.4: 거래량 1.3x → 1.1x (평소 수준이어도 OK)
+    if avg_vol20 > 0 and today_vol < avg_vol20 * 1.1:
         return False, f"거래량 부족", metrics
 
-    # 20일 고점 돌파 OR 20일선 되돌림
+    # v3.4: 20일 고점 돌파 OR MA20 위 (이전: MA20 0~3% 위만)
     breakout = today_close > high_20
-    pullback = today_close > ma20 and today_close < ma20 * 1.03  # MA20 0~3% 위
+    pullback = today_close > ma20  # MA20 위 어디든 OK
     if not (breakout or pullback):
         return False, "브레이크아웃/되돌림 패턴 아님", metrics
 

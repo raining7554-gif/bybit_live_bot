@@ -529,12 +529,14 @@ def check_kospi_regime() -> dict:
 # ═══════════════════════════════════════════════════════
 def scan_clenow_candidates(
     universe: list[tuple] = None,
-    n: int = 120, top_pct: float = 0.10, exit_ma: int = 50,
+    n: int = 120, top_pct: float = 0.15, exit_ma: int = 50,
     max_positions: int = 8,
     excluded_tickers: list[str] = None,
     max_price: int = None,   # 가격 상한 (소액 시드용)
 ) -> list[dict]:
     """유니버스 전체 스코어링 후 상위 top_pct 종목 반환.
+
+    v3.4: 진입 장벽 완화 — top_pct 10% → 15% (후보 풀 50% 확대).
 
     max_price: 종목 현재가 상한. 소액 시드에서 1주도 못 사는 종목 사전 제외.
     리턴: [{"ticker", "name", "score", "close", "ma50"}, ...] max_positions 개
