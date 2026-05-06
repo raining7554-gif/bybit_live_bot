@@ -90,6 +90,44 @@ def _ensure(ticker, pos, exchange=None):
         st["trail_drop"] = _compute_adaptive_trail(ticker, exchange)
 
 
+def _check_partial_tp_us(ticker: str, pos: dict, current_price: float) -> bool:
+    """v4.0: 미장 단계별 부분 익절. KR 와 동일 로직."""
+    try:
+        from config import PARTIAL_TP_LEVELS
+    except ImportError:
+        return False
+    buy = pos.get("buy_price", 0)
+    qty = pos.get("qty", 0)
+    if buy <= 0 or qty <= 0:
+        return False
+    pnl = (current_price - buy) / buy
+
+    if "original_qty" not in pos:
+        pos["original_qty"] = qty
+    if "tp_levels_hit" not in pos:
+        pos["tp_levels_hit"] = []
+
+    for level_pct, sell_ratio in PARTIAL_TP_LEVELS:
+        if level_pct in pos["tp_levels_hit"]:
+            continue
+        if pnl >= level_pct:
+            sell_qty = max(1, int(pos["original_qty"] * sell_ratio))
+            sell_qty = min(sell_qty, pos["qty"])
+            if sell_qty <= 0:
+                continue
+            if ot.sell_overseas(
+                ticker, pos.get("name", ticker), pos["exchange"],
+                sell_qty, buy,
+                f"부분익절 +{level_pct*100:.0f}% ({pnl*100:+.2f}%)"
+            ):
+                pos["qty"] -= sell_qty
+                pos["tp_levels_hit"].append(level_pct)
+                if pos["qty"] <= 0:
+                    return True
+            break
+    return False
+
+
 def check_overseas_positions(positions: dict) -> list:
     closed = []
     panic = check_qqq_panic()
@@ -100,6 +138,12 @@ def check_overseas_positions(positions: dict) -> list:
 
         current_price = get_current_price(ticker, pos["exchange"])
         if current_price == 0:
+            continue
+
+        # v4.0: 단계별 부분 익절
+        if _check_partial_tp_us(ticker, pos, current_price):
+            closed.append(ticker)
+            unregister_os(ticker)
             continue
 
         _ensure(ticker, pos, exchange=pos["exchange"])
