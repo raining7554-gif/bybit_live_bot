@@ -1,0 +1,90 @@
+name: Weekly MR v5 Backtest Sweep
+
+on:
+  schedule:
+    # 매주 월요일 00:00 UTC = 09:00 KST
+    - cron: "0 0 * * 1"
+  workflow_dispatch:        # 수동 실행 가능
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # 결과 JSON 커밋용
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt || pip install pandas numpy requests
+
+      - name: Run MR v5 sweep (BTC 180d)
+        run: |
+          python -m backtest.sweep_mr_v5 \
+            --symbol BTCUSDT --days 180 \
+            --out backtest/reports/sweep_mr_v5_BTC.json
+
+      - name: Run MR v5 sweep (ETH 180d)
+        continue-on-error: true
+        run: |
+          python -m backtest.sweep_mr_v5 \
+            --symbol ETHUSDT --days 180 \
+            --out backtest/reports/sweep_mr_v5_ETH.json
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backtest/reports/sweep_mr_v5_*.json || true
+          if git diff --staged --quiet; then
+            echo "no changes"
+          else
+            git commit -m "chore(backtest): weekly MR v5 sweep $(date -u +%Y-%m-%d)"
+            git push origin main
+          fi
+
+      - name: Telegram notify (optional)
+        if: env.TG_TOKEN != '' && env.TG_CHAT_ID != ''
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import json, os, requests
+          token = os.environ.get("TG_TOKEN", "")
+          chat = os.environ.get("TG_CHAT_ID", "")
+          if not token or not chat:
+              raise SystemExit(0)
+          try:
+              with open("backtest/reports/sweep_mr_v5_BTC.json") as f:
+                  d = json.load(f)
+          except Exception:
+              raise SystemExit(0)
+          top = d.get("top10", [])[:3]
+          lines = [f"📊 주간 MR v5 sweep 결과 ({d.get('symbol')} {d.get('days')}d)"]
+          for i, r in enumerate(top, 1):
+              if "error" in r: continue
+              lines.append(
+                  f"#{i} sharpe={r['sharpe']} ret={r['total_pct']}% "
+                  f"wr={r['win_rate']}% trades={r['n_trades']}"
+              )
+              p = r['params']
+              lines.append(
+                  f"   score>={p['score_min']} rsi={p['rsi_oversold']} "
+                  f"bb={p['bb_low']} vol={p['vol_spike']}"
+              )
+          lines.append("\n현재 운영값과 비교 후 수동 적용 결정")
+          msg = "\n".join(lines)
+          requests.post(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              json={"chat_id": chat, "text": msg},
+              timeout=10,
+          )
+          PY

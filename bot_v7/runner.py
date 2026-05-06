@@ -19,6 +19,7 @@ from . import ai
 from . import config as cfg
 from . import exchange as ex
 from . import notifier as tg
+from . import regime as rgm
 from . import safety
 from . import state as st
 from . import strategy as strat
@@ -30,6 +31,10 @@ _loop_count = 0
 _last_report_kst_hour: int = -1
 _last_regime_call_ts: dict[str, float] = {}    # symbol → last regime call ts
 _last_weekly_review_kst: str = ""
+
+# v6.0: 룰베이스 레짐 분류 캐시 (매 루프 갱신, 텔레그램/명령에서 즉시 조회)
+_last_regime: dict[str, dict] = {}             # symbol → classify() 결과
+_last_regime_log_ts: dict[str, float] = {}     # symbol → DB 마지막 기록 ts (1h 간격)
 
 # ── 심볼별 상태 ────────────────────────────────────────────────
 _positions: dict[str, dict] = {}        # symbol → 포지션 dict
@@ -506,6 +511,14 @@ def _setup_handlers():
         except Exception as e:
             tg.send(f"⚠️ /diagnose 오류: {e}")
 
+    def regime_cmd():
+        """v6.0: 룰베이스 레짐 분류 즉시 조회 (모든 심볼)."""
+        if not _last_regime:
+            tg.send("🧭 레짐 — 데이터 부족 (1~2 루프 후 다시 시도)")
+            return
+        snapshot = {sym: _last_regime.get(sym) for sym in cfg.SYMBOLS}
+        tg.send(rgm.format_regime_msg(snapshot))
+
     def weights_cmd():
         """v15 Tier 2: 현재 적용 중인 심볼별 자동 가중치 표시."""
         try:
@@ -544,6 +557,7 @@ def _setup_handlers():
         "/symbols": symbols_cmd,
         "/weights": weights_cmd,
         "/diagnose": diagnose_cmd,
+        "/regime":  regime_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
@@ -629,10 +643,26 @@ def _maybe_hourly_report(equity: float):
         f"24h: {w24}W/{l24}L ({wr24:.0f}%)  ${p24:+.2f}\n"
         f"7일: {w7}W/{l7}L ({wr7:.0f}%)  ${p7:+.2f}"
     )
+    # v6.0: 룰베이스 레짐 — 심볼별 한 줄 요약
+    if _last_regime:
+        icon_map = {"trending": "🔥", "ranging": "💤", "mixed": "🌫"}
+        reg_lines = ["🧭 레짐:"]
+        for sym in cfg.SYMBOLS:
+            r = _last_regime.get(sym)
+            if not r:
+                continue
+            ic = icon_map.get(r["regime"], "❓")
+            reg_lines.append(
+                f"  {ic} {_short(sym)} {r['regime']} "
+                f"→ {r['suggested']} ({int(r['confidence']*100)}%)"
+            )
+        if len(reg_lines) > 1:
+            msg += "\n" + "\n".join(reg_lines)
+    # AI 레짐 (있으면 추가 표시)
     reg = ai.get_last_regime()
     if reg:
         msg += (
-            f"\n🧠 레짐: {reg.get('regime', '?')} "
+            f"\n🧠 AI: {reg.get('regime', '?')} "
             f"({float(reg.get('confidence', 0))*100:.0f}%) → {reg.get('suggested', '?')}"
         )
     tg.send(msg)
@@ -703,7 +733,7 @@ def main():
         f"━ 안전 ━\n"
         f"자동 정지 OFF (수동 /halt)\n"
         f"서버사이드 -2% SL 부착\n"
-        f"명령: /status /score /ai /review /propose /lessons /symbols /weights /halt /resume\n"
+        f"명령: /status /score /ai /review /propose /lessons /symbols /weights /regime /halt /resume\n"
         f"⏰ KST 정각 리포트\n"
         f"🧠 AI: {'ON (' + cfg.AI_MODEL + ')' if (cfg.AI_ENABLED and cfg.GEMINI_API_KEY) else 'OFF'}"
     )
@@ -745,6 +775,33 @@ def main():
                     df15, df1h, df4h = strat.compute_indicators(
                         df15_raw, df1h_raw, df4h_raw)
                     symbol_dfs[symbol] = (df15, df1h, df4h)
+                    # v6.0: 룰베이스 레짐 분류 (관측 단계 — 거래 결정 미적용)
+                    try:
+                        reg = rgm.classify(df1h, df4h)
+                        if reg:
+                            _last_regime[symbol] = reg
+                            # 1시간 간격으로 DB 기록 (분류 정확도 사후 검증용)
+                            now_ts = time.time()
+                            if now_ts - _last_regime_log_ts.get(symbol, 0) > 3600:
+                                try:
+                                    from intelligence import journal as _ij
+                                    _ij.log_regime(
+                                        bot_id=ai.BOT_ID, asset=symbol,
+                                        regime=reg["regime"],
+                                        confidence=reg["confidence"],
+                                        summary=(
+                                            f"adx_4h={reg['adx_4h']} "
+                                            f"adx_1h={reg['adx_1h']} "
+                                            f"bb_ratio={reg['bb_ratio']}"
+                                        ),
+                                        suggested=reg["suggested"],
+                                    )
+                                    _last_regime_log_ts[symbol] = now_ts
+                                except Exception as je:
+                                    print(f"[regime log err {symbol}] {je}",
+                                          flush=True)
+                    except Exception as re:
+                        print(f"[regime classify {symbol} err] {re}", flush=True)
                     # 4H 추세 분류
                     r4 = df4h.iloc[-1]
                     ema50 = float(getattr(r4, "ema50", 0))
