@@ -93,6 +93,7 @@ def scan_overseas_candidates(exclude_tickers: list = None) -> list:
             "price": curr["price"],
             "change_rate": curr["change_rate"],
             "volume": curr["volume"],
+            "atr_pct": metrics.get("atr_pct"),  # v4.0
             "market": "overseas",
             "regime": regime,
             "reason": reason,

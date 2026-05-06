@@ -180,15 +180,34 @@ def get_overseas_balance() -> dict:
     }
 
 
-def calc_overseas_qty(price_usd: float, budget_override: float | None = None) -> int:
+def calc_overseas_qty(price_usd: float, budget_override: float | None = None,
+                      atr_pct: float | None = None) -> int:
     """종목당 예산 배분, 정수 주식 단위.
-    budget_override 지정 시 해당 금액 사용 (레버리지 풀매수용).
+
+    v4.0: atr_pct 제공 + RISK_PARITY_ENABLED 면 변동성 기반 사이즈 조정.
+    저변동주는 큰 사이즈, 고변동주는 작은 사이즈.
+    budget_override 지정 시 vol 조정 무시 (레버리지 풀매수용).
     """
     if price_usd <= 0:
         return 0
     balance = get_overseas_balance()
     available = balance["available_usd"]
     budget = budget_override if budget_override else OS_POSITION_USD
+
+    # v4.0: 변동성 기반 사이즈 조정
+    if budget_override is None:
+        try:
+            from config import (RISK_PARITY_ENABLED, TARGET_DAILY_RISK_PCT,
+                                MIN_POSITION_PCT)
+            if RISK_PARITY_ENABLED and atr_pct and atr_pct > 0.005:
+                # 미국주 시드 = available, target = TARGET_DAILY_RISK_PCT
+                # vol_adj_dollar = available × (target / atr_pct)
+                vol_adj = available * (TARGET_DAILY_RISK_PCT / atr_pct)
+                budget = min(budget, vol_adj)
+                budget = max(budget, available * MIN_POSITION_PCT)
+        except ImportError:
+            pass
+
     budget = min(budget, available)
     qty = int(budget // price_usd)
     return max(qty, 0)
@@ -196,7 +215,9 @@ def calc_overseas_qty(price_usd: float, budget_override: float | None = None) ->
 
 def buy_overseas(ticker: str, name: str, exchange: str,
                  reason: str = "스윙 진입",
-                 full_allocation_usd: float | None = None) -> dict | None:
+                 full_allocation_usd: float | None = None,
+                 atr_pct: float | None = None) -> dict | None:
+    """v4.0: atr_pct 제공시 변동성 기반 사이즈 조정."""
     acc_no, acc_prod = _acc_parts()
     tr_id = "VTTT1002U" if IS_PAPER else "TTTT1002U"
 
@@ -204,7 +225,8 @@ def buy_overseas(ticker: str, name: str, exchange: str,
     if current_price == 0:
         return None
 
-    qty = calc_overseas_qty(current_price, budget_override=full_allocation_usd)
+    qty = calc_overseas_qty(current_price, budget_override=full_allocation_usd,
+                            atr_pct=atr_pct)
     if qty == 0:
         budget = full_allocation_usd or OS_POSITION_USD
         bal = get_overseas_balance()

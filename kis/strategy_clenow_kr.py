@@ -572,9 +572,22 @@ def scan_clenow_candidates(
         ma50 = _sma(closes, exit_ma)
         if closes[0] <= ma50:
             continue  # MA50 이탈 종목 제외
+        # v4.0: 14일 ATR% 계산 (변동성 기반 사이징용)
+        atr_pct = 0.02  # default 2%
+        if len(candles) >= 15:
+            trs = []
+            for i in range(min(14, len(candles) - 1)):
+                h = candles[i].get("high", 0)
+                l = candles[i].get("low", 0)
+                pc = candles[i + 1].get("close", 0)
+                if h > 0 and l > 0 and pc > 0:
+                    trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+            if trs and closes[0] > 0:
+                atr_pct = (sum(trs) / len(trs)) / closes[0]
         scored.append({
             "ticker": ticker, "name": name,
             "score": score, "close": closes[0], "ma50": ma50,
+            "atr_pct": atr_pct,  # v4.0
         })
 
     if max_price and skipped_price:

@@ -777,6 +777,7 @@ def main():
                             c["ticker"], c["name"],
                             reason=c.get("reason", f"[{DOM_STRATEGY_MODE}] 진입"),
                             expected_price=c.get("close") or c.get("price"),
+                            atr_pct=c.get("atr_pct"),  # v4.0 변동성 사이징
                         )
                         if res:
                             res["strategy_type"] = DOM_STRATEGY_MODE.upper()
@@ -879,6 +880,7 @@ def main():
                             res = trader_overseas.buy_overseas(
                                 c["ticker"], c["name"], c["exchange"],
                                 reason=f"[{c.get('regime','')}] {c['reason']}",
+                                atr_pct=c.get("atr_pct"),  # v4.0
                             )
                             if res:
                                 os_pos[c["ticker"]] = res
