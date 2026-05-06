@@ -107,14 +107,25 @@ def _check_partial_tp_us(ticker: str, pos: dict, current_price: float) -> bool:
     if "tp_levels_hit" not in pos:
         pos["tp_levels_hit"] = []
 
+    # v6.2: 소수점 매매 호환 — qty 가 float 일 수 있음
+    try:
+        from config import US_FRACTIONAL_ENABLED as _frac
+    except ImportError:
+        _frac = False
     for level_pct, sell_ratio in PARTIAL_TP_LEVELS:
         if level_pct in pos["tp_levels_hit"]:
             continue
         if pnl >= level_pct:
-            sell_qty = max(1, int(pos["original_qty"] * sell_ratio))
-            sell_qty = min(sell_qty, pos["qty"])
-            if sell_qty <= 0:
-                continue
+            if _frac:
+                sell_qty = round(pos["original_qty"] * sell_ratio, 4)
+                sell_qty = min(sell_qty, pos["qty"])
+                if sell_qty * current_price < 5.0:  # 너무 작으면 skip
+                    continue
+            else:
+                sell_qty = max(1, int(pos["original_qty"] * sell_ratio))
+                sell_qty = min(sell_qty, pos["qty"])
+                if sell_qty <= 0:
+                    continue
             if ot.sell_overseas(
                 ticker, pos.get("name", ticker), pos["exchange"],
                 sell_qty, buy,
@@ -122,7 +133,7 @@ def _check_partial_tp_us(ticker: str, pos: dict, current_price: float) -> bool:
             ):
                 pos["qty"] -= sell_qty
                 pos["tp_levels_hit"].append(level_pct)
-                if pos["qty"] <= 0:
+                if pos["qty"] <= 0.0001:
                     return True
             break
     return False
@@ -175,11 +186,24 @@ def check_overseas_positions(positions: dict) -> list:
                 continue
 
         # 3) 패닉 방어: QQQ -2% 시 50% 축소 (1회만)
-        if panic and not st["panic_reduced"] and pos["qty"] >= 2:
-            reduce_qty = pos["qty"] // 2
+        # v6.2: 소수점 호환 — qty 가 0.5 같은 경우도 허용
+        try:
+            from config import US_FRACTIONAL_ENABLED as _frac
+        except ImportError:
+            _frac = False
+        if panic and not st["panic_reduced"]:
+            qty_now = pos["qty"]
+            if _frac:
+                if qty_now * current_price < 10.0:  # 축소 후 너무 작으면 skip
+                    continue
+                reduce_qty = round(qty_now / 2, 4)
+            else:
+                if qty_now < 2:
+                    continue
+                reduce_qty = int(qty_now // 2)
             if ot.sell_overseas(ticker, pos["name"], pos["exchange"],
                                 reduce_qty, pos["buy_price"],
-                                f"QQQ 패닉 -2%+ 방어 축소 {reduce_qty}주"):
+                                f"QQQ 패닉 -2%+ 방어 축소 {reduce_qty}"):
                 pos["qty"] -= reduce_qty
                 st["panic_reduced"] = True
 

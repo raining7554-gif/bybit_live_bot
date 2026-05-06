@@ -84,17 +84,23 @@ def scan_overseas_candidates(exclude_tickers: list = None) -> list:
         print(f"[OS_SCANNER] 국면 BEAR → 신규 진입 보류")
         return []
 
+    # v6.2: 소수점 매매 활성시 가격 필터 미적용 (분수주 매수 가능)
+    try:
+        from config import US_FRACTIONAL_ENABLED as _frac
+    except ImportError:
+        _frac = False
+
     candidates = []
     for stock in OS_UNIVERSE:
         ticker = stock["ticker"]
         if ticker in exclude_tickers:
             continue
 
-        # 현재가 확인 — $150 예산으로 1주라도 살 수 있어야 함
         curr = get_overseas_current(ticker, stock["exchange"])
         if not curr or curr["price"] == 0:
             continue
-        if curr["price"] > OS_POSITION_USD:
+        # 정수 매매시만 가격 > 예산 종목 자동 스킵
+        if not _frac and curr["price"] > OS_POSITION_USD:
             print(f"[OS_SCANNER] ⏭️  {stock['name']}({ticker}) ${curr['price']:.2f} → 예산 초과")
             continue
 
@@ -163,6 +169,12 @@ def diagnose_overseas() -> dict:
     except Exception:
         pass
 
+    # v6.2: 소수점 매매시 가격 필터 미적용
+    try:
+        from config import US_FRACTIONAL_ENABLED as _frac
+    except ImportError:
+        _frac = False
+
     results = []
     summary = {}
 
@@ -185,7 +197,7 @@ def diagnose_overseas() -> dict:
             price = curr["price"]
             entry["price"] = price
 
-            if price > OS_POSITION_USD:
+            if not _frac and price > OS_POSITION_USD:
                 entry["status"] = "budget"
                 entry["reason"] = f"${price:.2f} > 예산 ${OS_POSITION_USD}"
                 results.append(entry)
