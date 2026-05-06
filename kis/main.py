@@ -140,30 +140,95 @@ def get_balance_info() -> dict:
 # 현황 요약
 # ═══════════════════════════════════════════════════════
 def send_summary(dom_pos, os_pos, trade_count):
-    lines = [f"📊 <b>현황 요약</b> ({hhmm()} KST)"]
+    """정각 KST 리포트 — 시장 운영시간 내에 1시간마다.
+
+    국내장 (09:00~15:30) 또는 미장 (22:30~05:30) 동안 정각에 호출.
+    잔고 (KRW + USD), 보유종목 + 실시간 PnL, 오늘 거래수 표시.
+    """
     bal = get_balance_info()
+
+    # USD 가용 잔고
+    try:
+        import trader_overseas as _ot
+        os_bal = _ot.get_overseas_balance()
+        usd_avail = os_bal.get("available_usd", 0)
+    except Exception:
+        usd_avail = 0
+
+    lines = [f"⏰ <b>{hhmm()} KST</b>"]
+
     if bal:
-        em = "📈" if bal["eval_profit"] >= 0 else "📉"
+        em = "📈" if bal.get("eval_profit", 0) >= 0 else "📉"
         lines.append(
-            f"\n💰 <b>계좌</b>\n"
-            f"총평가: {bal['total_eval']:,}원\n"
-            f"주문가능: {bal['available']:,}원\n"
-            f"{em} 평가손익: {bal['eval_profit']:+,}원 ({bal['profit_rate']:+.2f}%)"
+            f"💰 KRW ₩{bal.get('total_eval', 0):,} (가용 ₩{bal.get('available', 0):,})\n"
+            f"   USD 가용 ${usd_avail:.2f}\n"
+            f"   {em} 손익 ₩{bal.get('eval_profit', 0):+,} "
+            f"({bal.get('profit_rate', 0):+.2f}%)"
         )
+
+    # 국내 보유 + 현재가 + PnL
     if dom_pos:
-        lines.append("\n🇰🇷 <b>국내 보유</b>")
+        lines.append("\n🇰🇷 <b>국내</b>")
         for t, p in dom_pos.items():
-            lines.append(f"• {p['name']}({t}) {p['qty']}주 @ {p['buy_price']:,}")
-    else:
-        lines.append("\n🇰🇷 국내 보유 없음")
+            buy = p.get('buy_price', 0)
+            qty = p.get('qty', 0)
+            cur = buy
+            try:
+                d = api.get(
+                    "/uapi/domestic-stock/v1/quotations/inquire-price",
+                    "FHKST01010100",
+                    {"fid_cond_mrkt_div_code": "J", "fid_input_iscd": t},
+                )
+                cur = int(d.get("output", {}).get("stck_prpr", buy)) or buy
+            except Exception:
+                pass
+            pnl_pct = (cur - buy) / buy * 100 if buy else 0
+            pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
+            lines.append(
+                f"  {pnl_emoji} {p.get('name', t)}({t}) {qty}주 "
+                f"@ ₩{buy:,} → ₩{cur:,} ({pnl_pct:+.2f}%)"
+            )
+
+    # 해외 보유 + 현재가 + PnL
     if os_pos:
-        lines.append("\n🇺🇸 <b>해외 보유</b>")
+        lines.append("\n🇺🇸 <b>해외</b>")
         for t, p in os_pos.items():
-            lines.append(f"• {p['name']}({t}) {p['qty']}주 @ ${p['buy_price']:.2f}")
-    else:
-        lines.append("\n🇺🇸 해외 보유 없음")
-    lines.append(f"\n📈 오늘 거래: {trade_count}회")
-    telegram.send("\n".join(lines), dedup_sec=600)
+            buy = p.get('buy_price', 0)
+            qty = p.get('qty', 0)
+            cur = buy
+            exc = p.get('exchange', 'NAS')
+            try:
+                d = api.get(
+                    "/uapi/overseas-price/v1/quotations/price",
+                    "HHDFS00000300",
+                    {"AUTH": "", "EXCD": exc, "SYMB": t},
+                )
+                out = d.get("output", {})
+                # last 가 비어있으면 base 로 fallback
+                for k in ("last", "base", "open"):
+                    v = out.get(k)
+                    if v not in (None, "", "0"):
+                        try:
+                            fv = float(v)
+                            if fv > 0:
+                                cur = fv
+                                break
+                        except (ValueError, TypeError):
+                            pass
+            except Exception:
+                pass
+            pnl_pct = (cur - buy) / buy * 100 if buy else 0
+            pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
+            lines.append(
+                f"  {pnl_emoji} {p.get('name', t)}({t}) {qty}주 "
+                f"@ ${buy:.2f} → ${cur:.2f} ({pnl_pct:+.2f}%)"
+            )
+
+    if not dom_pos and not os_pos:
+        lines.append("\n포지션: 없음")
+
+    lines.append(f"\n📊 오늘 거래: {trade_count}회")
+    telegram.send_force("\n".join(lines))
 
 
 # ═══════════════════════════════════════════════════════
@@ -309,7 +374,8 @@ def main():
         f"국내 진입창: {DOM_SCAN_START}~{DOM_SCAN_END}\n"
         f"해외 진입창: {OS_SCAN_TIME_START}~{OS_SCAN_TIME_END} KST\n"
         f"현재 {hhmm()} KST\n"
-        f"{ai_label} | 명령: /review /lessons /propose /symbols"
+        f"{ai_label} | 명령: /review /lessons /propose /symbols\n"
+        f"⏰ 운영시간 정각마다 현황 리포트"
         + (f"\n\n{health_report}" if health_report else "")
     )
 
@@ -563,9 +629,9 @@ def main():
         "/lessons": cmd_lessons,
         "/propose": cmd_propose,
         "/symbols": cmd_symbols,
-        "/balance": cmd_balance,
     }
     last_weekly_review_kst_date = ""
+    last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
 
     while True:
         now = now_kst()
@@ -777,11 +843,12 @@ def main():
                         trade_count += 1
                     os_eod_done = True
 
-        # ════ 현황 요약 (1시간 주기) ═══════════════════
-        if elapsed(last_summary) >= SUMMARY_INTERVAL_SEC:
-            if is_dom_market_hours() or is_os_market_hours():
-                send_summary(dom_pos, os_pos, trade_count)
-            last_summary = now
+        # ════ 정각 KST 현황 요약 (시간별 1회, 운영시간 내만) ═══════════════════
+        if (now.minute < 5
+                and now.hour != last_summary_kst_hour
+                and (is_dom_market_hours() or is_os_market_hours())):
+            send_summary(dom_pos, os_pos, trade_count)
+            last_summary_kst_hour = now.hour
 
         # ════ 일일 결산 (15:35) ════════════════════════
         if t_hm == DOM_CLOSING_MSG and not sent_closing and is_trading_day(now):
