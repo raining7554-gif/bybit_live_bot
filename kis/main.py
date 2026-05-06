@@ -380,7 +380,16 @@ def main():
             etf_list = ", ".join(a["ticker"] for a in OS_LEVERAGED_ALLOCATIONS)
             os_desc = f"해외: <b>레버리지 4-way</b> ({etf_list}, MA200)"
     else:
-        os_desc = f"해외: 섹터 스윙 (최대 {OS_MAX_POSITIONS}포지션)"
+        # v6.2: budget + 소수점 표기
+        try:
+            from config import US_FRACTIONAL_ENABLED, OS_POSITION_USD as _opu
+        except ImportError:
+            US_FRACTIONAL_ENABLED, _opu = False, 600
+        frac = " 🔢소수점" if US_FRACTIONAL_ENABLED else ""
+        os_desc = (
+            f"해외: 섹터 스윙 (최대 {OS_MAX_POSITIONS}포지션, "
+            f"종목당 ${_opu:.0f}{frac})"
+        )
 
     paper_label = "📝 모의투자" if IS_PAPER else "💵 실거래"
 
@@ -398,7 +407,7 @@ def main():
         f"국내 진입창: {DOM_SCAN_START}~{DOM_SCAN_END}\n"
         f"해외 진입창: {OS_SCAN_TIME_START}~{OS_SCAN_TIME_END} KST\n"
         f"현재 {hhmm()} KST\n"
-        f"{ai_label} | 명령: /review /lessons /propose /symbols\n"
+        f"{ai_label} | 명령: /review /lessons /propose /symbols /diagnose /news /scan_us\n"
         f"⏰ 운영시간 정각마다 현황 리포트"
         + (f"\n\n{health_report}" if health_report else "")
     )

@@ -53,9 +53,20 @@ OS_SCAN_TIME_END    = os.environ.get("OS_SCAN_TIME_END", "05:30")
 OS_EOD_CHECK        = os.environ.get("OS_EOD_CHECK", "05:45")  # 미장 종료 직전 일봉 청산 체크
 
 # 포지션
-OS_MAX_POSITIONS  = 2               # $350 시드면 2종목이 현실적
-OS_POSITION_USD   = 150             # 1종목당 $150 목표
+# v6.2: $1300 USD 기준 — 우량주 1주 가격 ($200~$500) 커버 위해 budget 증액
+OS_MAX_POSITIONS  = int(os.environ.get("OS_MAX_POSITIONS", "2"))
+OS_POSITION_USD   = float(os.environ.get("OS_POSITION_USD", "600"))   # 1종목당 $600
 OS_QQQ_BASE_USD   = 50              # QQQ 방어용 베이스 (상승장에서만)
+
+# v6.2: 미국주 소수점 매매 (fractional shares) 지원
+# KIS 계좌가 소수점 매매 신청되어 있어야 함 (HTS 에서 약관 동의 필요)
+# 활성화 시: $600 budget 으로 META($617) 도 0.97주 매수 가능
+# 안전 비활성화 (default false) — TR_ID 검증 후 사용자가 켜야 함
+US_FRACTIONAL_ENABLED = os.environ.get("US_FRACTIONAL_ENABLED", "false").lower() == "true"
+# 소수점 매매 TR_ID (KIS 공식 — 실전계좌 기준)
+US_FRACTIONAL_BUY_TR  = os.environ.get("US_FRACTIONAL_BUY_TR",  "TTTS6036U")
+US_FRACTIONAL_SELL_TR = os.environ.get("US_FRACTIONAL_SELL_TR", "TTTS6037U")
+US_FRACTIONAL_DECIMALS = 4  # KIS 소수점 4자리 허용
 
 # 청산 조건
 OS_STOP_LOSS      = 0.05            # -5% 하드 손절 (장중 실시간 봇 감시)

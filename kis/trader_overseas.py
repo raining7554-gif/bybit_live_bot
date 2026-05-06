@@ -1,7 +1,14 @@
-"""해외 매매 실행 v3.0 — 고정 달러 포지션 사이징"""
+"""해외 매매 실행 v3.0 — 고정 달러 포지션 사이징
+
+v6.2: 소수점 매매 (fractional) 지원 추가. config.US_FRACTIONAL_ENABLED 로 토글.
+"""
 import kis_auth as api
 import telegram
-from config import ACCOUNT_NO, IS_PAPER, OS_POSITION_USD
+from config import (
+    ACCOUNT_NO, IS_PAPER, OS_POSITION_USD,
+    US_FRACTIONAL_ENABLED, US_FRACTIONAL_BUY_TR, US_FRACTIONAL_SELL_TR,
+    US_FRACTIONAL_DECIMALS,
+)
 
 try:
     from intelligence import journal as _journal, agent as _agent
@@ -181,27 +188,23 @@ def get_overseas_balance() -> dict:
 
 
 def calc_overseas_qty(price_usd: float, budget_override: float | None = None,
-                      atr_pct: float | None = None) -> int:
-    """종목당 예산 배분, 정수 주식 단위.
+                      atr_pct: float | None = None) -> float:
+    """종목당 예산 배분.
 
-    v4.0: atr_pct 제공 + RISK_PARITY_ENABLED 면 변동성 기반 사이즈 조정.
-    저변동주는 큰 사이즈, 고변동주는 작은 사이즈.
-    budget_override 지정 시 vol 조정 무시 (레버리지 풀매수용).
+    v4.0: atr_pct + RISK_PARITY_ENABLED 면 변동성 기반 사이즈 조정.
+    v6.2: US_FRACTIONAL_ENABLED 면 소수점 4자리, 아니면 정수.
     """
     if price_usd <= 0:
-        return 0
+        return 0.0
     balance = get_overseas_balance()
     available = balance["available_usd"]
     budget = budget_override if budget_override else OS_POSITION_USD
 
-    # v4.0: 변동성 기반 사이즈 조정
     if budget_override is None:
         try:
             from config import (RISK_PARITY_ENABLED, TARGET_DAILY_RISK_PCT,
                                 MIN_POSITION_PCT)
             if RISK_PARITY_ENABLED and atr_pct and atr_pct > 0.005:
-                # 미국주 시드 = available, target = TARGET_DAILY_RISK_PCT
-                # vol_adj_dollar = available × (target / atr_pct)
                 vol_adj = available * (TARGET_DAILY_RISK_PCT / atr_pct)
                 budget = min(budget, vol_adj)
                 budget = max(budget, available * MIN_POSITION_PCT)
@@ -209,17 +212,35 @@ def calc_overseas_qty(price_usd: float, budget_override: float | None = None,
             pass
 
     budget = min(budget, available)
-    qty = int(budget // price_usd)
-    return max(qty, 0)
+
+    if US_FRACTIONAL_ENABLED:
+        # 소수점 매매: budget / price 그대로, 4자리 반올림(내림)
+        qty = budget / price_usd
+        # 내림 (예산 초과 방지)
+        factor = 10 ** US_FRACTIONAL_DECIMALS
+        qty = int(qty * factor) / factor
+        # 너무 작으면 무의미 (수수료 > 매수가치)
+        if qty * price_usd < 5.0:
+            return 0.0
+        return max(qty, 0.0)
+    else:
+        # 정수 매매 (기존)
+        qty = int(budget // price_usd)
+        return float(max(qty, 0))
 
 
 def buy_overseas(ticker: str, name: str, exchange: str,
                  reason: str = "스윙 진입",
                  full_allocation_usd: float | None = None,
                  atr_pct: float | None = None) -> dict | None:
-    """v4.0: atr_pct 제공시 변동성 기반 사이즈 조정."""
+    """v4.0: atr_pct 제공시 변동성 기반 사이즈 조정.
+    v6.2: US_FRACTIONAL_ENABLED 면 소수점 매매 TR_ID 사용.
+    """
     acc_no, acc_prod = _acc_parts()
-    tr_id = "VTTT1002U" if IS_PAPER else "TTTT1002U"
+    if US_FRACTIONAL_ENABLED:
+        tr_id = US_FRACTIONAL_BUY_TR  # default TTTS6036U
+    else:
+        tr_id = "VTTT1002U" if IS_PAPER else "TTTT1002U"
 
     current_price = _get_price_safe(exchange, ticker)
     if current_price == 0:
@@ -237,10 +258,8 @@ def buy_overseas(ticker: str, name: str, exchange: str,
         except Exception:
             sw = 1.0
 
-    # full_allocation_usd 없을 때만 weight 적용 (budget_override 모드는 그대로)
     adjusted_full_allocation = full_allocation_usd
     if full_allocation_usd is None and sw != 1.0:
-        # calc 에 budget_override 로 OS_POSITION_USD × sw 전달
         from config import OS_POSITION_USD as _ospu
         adjusted_full_allocation = _ospu * sw
 
@@ -255,15 +274,21 @@ def buy_overseas(ticker: str, name: str, exchange: str,
         msg = (f"⚠️ 해외 매수 스킵: {name}({ticker})\n"
                f"현재가 ${current_price:.2f} > 슬리브 예산 ${budget:.2f}\n"
                f"(가용 ${bal.get('available_usd', 0):.2f})")
-        print(f"[OS_TRADER] {msg}")  # v4.1: 텔레그램 미전송, 로그만
+        print(f"[OS_TRADER] {msg}")
         return None
+
+    # v6.2: 소수점이면 4자리 표기, 정수면 그대로
+    if US_FRACTIONAL_ENABLED:
+        ord_qty_str = f"{qty:.{US_FRACTIONAL_DECIMALS}f}"
+    else:
+        ord_qty_str = str(int(qty))
 
     body = {
         "CANO": acc_no,
         "ACNT_PRDT_CD": acc_prod,
         "OVRS_EXCG_CD": exchange,
         "PDNO": ticker,
-        "ORD_QTY": str(qty),
+        "ORD_QTY": ord_qty_str,
         "OVRS_ORD_UNPR": "0",
         "ORD_SVR_DVSN_CD": "0",
         "ORD_DVSN": "00",
@@ -272,11 +297,12 @@ def buy_overseas(ticker: str, name: str, exchange: str,
     data = api.post("/uapi/overseas-stock/v1/trading/order", tr_id, body)
     if data.get("rt_cd") == "0":
         amount = current_price * qty
-        print(f"[OS_TRADER] 매수: {name}({ticker}) {qty}주 @ ${current_price:.2f}")
+        qty_disp = (f"{qty:.4f}" if US_FRACTIONAL_ENABLED else f"{int(qty)}")
+        print(f"[OS_TRADER] 매수: {name}({ticker}) {qty_disp}주 @ ${current_price:.2f}")
         telegram.send(
             f"🟢 <b>해외 매수 체결</b>\n"
             f"종목: {name} ({ticker})\n"
-            f"가격: ${current_price:.2f} × {qty}주\n"
+            f"가격: ${current_price:.2f} × {qty_disp}주\n"
             f"금액: ${amount:.2f}\n"
             f"사유: {reason}",
             dedup_sec=30,
@@ -298,10 +324,16 @@ def buy_overseas(ticker: str, name: str, exchange: str,
         return None
 
 
-def sell_overseas(ticker: str, name: str, exchange: str, qty: int,
+def sell_overseas(ticker: str, name: str, exchange: str, qty: float,
                   buy_price: float, reason: str = "청산") -> bool:
+    """v6.2: qty float 허용 (소수점 매매시). 정수 모드는 자동 int 변환."""
     acc_no, acc_prod = _acc_parts()
-    tr_id = "VTTT1006U" if IS_PAPER else "TTTT1006U"
+    if US_FRACTIONAL_ENABLED:
+        tr_id = US_FRACTIONAL_SELL_TR  # TTTS6037U
+        ord_qty_str = f"{float(qty):.{US_FRACTIONAL_DECIMALS}f}"
+    else:
+        tr_id = "VTTT1006U" if IS_PAPER else "TTTT1006U"
+        ord_qty_str = str(int(qty))
 
     current_price = _get_price_safe(exchange, ticker)
 
@@ -310,7 +342,7 @@ def sell_overseas(ticker: str, name: str, exchange: str, qty: int,
         "ACNT_PRDT_CD": acc_prod,
         "OVRS_EXCG_CD": exchange,
         "PDNO": ticker,
-        "ORD_QTY": str(qty),
+        "ORD_QTY": ord_qty_str,
         "OVRS_ORD_UNPR": "0",
         "ORD_SVR_DVSN_CD": "0",
         "ORD_DVSN": "00",
