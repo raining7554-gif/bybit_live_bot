@@ -127,3 +127,188 @@ def scan_overseas_candidates(exclude_tickers: list = None) -> list:
 # 레거시 호환
 def detect_overseas_regime() -> str:
     return get_os_regime().get("regime", "BULL")
+
+
+# v6.1: 진단 — 유니버스 각 종목이 왜 탈락했는지 한눈에
+def diagnose_overseas() -> dict:
+    """모든 유니버스 종목의 진입 가능 상태를 진단.
+
+    Returns: {
+        "regime": "BULL/SIDEWAYS/BEAR",
+        "qqq_panic": bool,
+        "results": [
+            {"ticker", "name", "price", "status", "reason", "metrics?"},
+            ...
+        ],
+        "summary": {status: count, ...}
+    }
+    status 값:
+        "pass"        : 진입 조건 모두 통과
+        "no_data"     : 가격 조회 실패
+        "budget"      : 가격 > OS_POSITION_USD
+        "ma_align"    : MA50 ≤ MA200 (정배열 X)
+        "ma20"        : 종가 ≤ MA20
+        "rsi"         : RSI 범위 밖
+        "volume"      : 거래량 부족
+        "pattern"     : 브레이크아웃/되돌림 X
+        "data_short"  : 일봉 부족
+        "error"       : 예외 발생
+    """
+    regime_info = get_os_regime()
+    regime = regime_info["regime"]
+    qqq_panic = False
+    try:
+        from strategy_overseas import check_qqq_panic
+        qqq_panic = check_qqq_panic()
+    except Exception:
+        pass
+
+    results = []
+    summary = {}
+
+    for stock in OS_UNIVERSE:
+        ticker = stock["ticker"]
+        name = stock["name"]
+        exchange = stock["exchange"]
+        entry: dict = {"ticker": ticker, "name": name, "exchange": exchange}
+
+        try:
+            curr = get_overseas_current(ticker, exchange)
+            if not curr or curr.get("price", 0) == 0:
+                entry["price"] = 0.0
+                entry["status"] = "no_data"
+                entry["reason"] = "현재가 조회 실패"
+                results.append(entry)
+                summary["no_data"] = summary.get("no_data", 0) + 1
+                continue
+
+            price = curr["price"]
+            entry["price"] = price
+
+            if price > OS_POSITION_USD:
+                entry["status"] = "budget"
+                entry["reason"] = f"${price:.2f} > 예산 ${OS_POSITION_USD}"
+                results.append(entry)
+                summary["budget"] = summary.get("budget", 0) + 1
+                continue
+
+            ok, reason, metrics = check_os_entry(ticker, exchange, name)
+            entry["metrics"] = metrics
+            if ok:
+                entry["status"] = "pass"
+                entry["reason"] = reason
+                summary["pass"] = summary.get("pass", 0) + 1
+            else:
+                # 사유 분류
+                if "일봉 부족" in reason:
+                    s = "data_short"
+                elif "MA50" in reason and "≤" in reason:
+                    s = "ma_align"
+                elif "MA20" in reason:
+                    s = "ma20"
+                elif "RSI" in reason:
+                    s = "rsi"
+                elif "거래량" in reason:
+                    s = "volume"
+                elif "패턴" in reason or "브레이크" in reason:
+                    s = "pattern"
+                else:
+                    s = "other"
+                entry["status"] = s
+                entry["reason"] = reason
+                summary[s] = summary.get(s, 0) + 1
+            results.append(entry)
+        except Exception as e:
+            entry["status"] = "error"
+            entry["reason"] = f"{type(e).__name__}: {str(e)[:50]}"
+            results.append(entry)
+            summary["error"] = summary.get("error", 0) + 1
+
+    return {
+        "regime":   regime,
+        "qqq_panic": qqq_panic,
+        "results":  results,
+        "summary":  summary,
+        "universe_size": len(OS_UNIVERSE),
+        "budget_usd": OS_POSITION_USD,
+    }
+
+
+def format_diagnose_msg(d: dict) -> str:
+    """diagnose_overseas() 결과 → 텔레그램 메시지."""
+    if not d:
+        return "🔍 US 스캔 진단 — 데이터 없음"
+
+    regime = d.get("regime", "?")
+    panic = d.get("qqq_panic", False)
+    summary = d.get("summary", {})
+    results = d.get("results", [])
+    universe = d.get("universe_size", 0)
+    budget = d.get("budget_usd", 0)
+
+    regime_icon = {"BULL": "🟢", "SIDEWAYS": "🟡", "BEAR": "🔴"}.get(regime, "⚪")
+    panic_str = " ⚠️QQQ패닉" if panic else ""
+
+    header = (
+        f"🔍 <b>US 스캔 진단</b> (유니버스 {universe}종, 1주 예산 ${budget})\n"
+        f"국면: {regime_icon} {regime}{panic_str}"
+    )
+    if regime == "BEAR":
+        header += "\n→ BEAR 차단 — 신규 진입 보류 (regime 회복 대기)"
+
+    # 카테고리별 그룹
+    groups = {
+        "pass":       ("✅ 통과",     []),
+        "budget":     ("💰 예산초과", []),
+        "ma_align":   ("📉 정배열X",  []),
+        "ma20":       ("📊 MA20하향", []),
+        "rsi":        ("🔥 RSI범위밖", []),
+        "volume":     ("🔇 거래량부족", []),
+        "pattern":    ("📐 패턴X",    []),
+        "data_short": ("📦 일봉부족", []),
+        "no_data":    ("❌ 데이터X",  []),
+        "error":      ("⚠️  오류",   []),
+        "other":      ("❓ 기타",     []),
+    }
+
+    for r in results:
+        s = r.get("status", "other")
+        if s not in groups:
+            s = "other"
+        if s == "pass":
+            groups[s][1].append(f"{r['ticker']} ${r.get('price', 0):.0f} {r.get('reason', '')}")
+        elif s == "budget":
+            groups[s][1].append(f"{r['ticker']}(${r.get('price', 0):.0f})")
+        elif s == "rsi":
+            m = r.get("metrics", {})
+            groups[s][1].append(f"{r['ticker']}({int(m.get('rsi', 0))})")
+        else:
+            groups[s][1].append(r["ticker"])
+
+    lines = [header, ""]
+    # pass 먼저, 나머지는 카운트 많은 순
+    if groups["pass"][1]:
+        label, items = groups["pass"]
+        lines.append(f"<b>{label}</b> ({len(items)}):")
+        for it in items[:8]:
+            lines.append(f"   {it}")
+        if len(items) > 8:
+            lines.append(f"   ... +{len(items) - 8}")
+        lines.append("")
+
+    # 나머지 (카운트 많은 순)
+    other_keys = sorted(
+        [k for k in groups if k != "pass"],
+        key=lambda k: -len(groups[k][1]),
+    )
+    for k in other_keys:
+        label, items = groups[k]
+        if not items:
+            continue
+        # 한 줄 표시 (티커만)
+        joined = ", ".join(items[:15])
+        if len(items) > 15:
+            joined += f", ... +{len(items) - 15}"
+        lines.append(f"{label} ({len(items)}): {joined}")
+
+    return "\n".join(lines)
