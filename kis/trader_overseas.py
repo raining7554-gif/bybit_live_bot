@@ -69,8 +69,8 @@ def _query_psamount() -> dict:
             {
                 "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
                 "OVRS_EXCG_CD": "NASD",
-                "OVRS_ORD_UNPR": "0",
-                "ITEM_CD": "",
+                "OVRS_ORD_UNPR": "100",  # 더미 가격 (KIS가 0 거부)
+                "ITEM_CD": "AAPL",        # 더미 종목 (잔고 조회 목적)
             },
         )
         if data.get("rt_cd") == "0":
@@ -126,16 +126,19 @@ def get_overseas_balance() -> dict:
                 or _safe_float(o3.get("frcr_dncl_amt1"))
                 or _safe_float(o3.get("frcr_dncl_amt"))
             )
-            # v3.7: output2 (통화별 list) 에서 USD 항목 찾기 — 환전 후 보통 여기에 있음
+            # v3.8: output2 USD 항목에서 가용 USD 찾기 — 다양한 필드명 시도
             if available_usd == 0 and o2_list:
                 for entry in o2_list:
                     if not isinstance(entry, dict):
                         continue
                     crcy = (entry.get("crcy_cd") or "").upper()
                     if crcy == "USD":
-                        # USD 통화 항목 — 가용 외화 후보 필드들
+                        # 실제 KIS 응답 (확인됨): frcr_dncl_amt_2, frcr_drwg_psbl_amt_1
                         candidate = (
-                            _safe_float(entry.get("frcr_dncl_amt1"))
+                            _safe_float(entry.get("frcr_dncl_amt_2"))
+                            or _safe_float(entry.get("frcr_drwg_psbl_amt_1"))
+                            or _safe_float(entry.get("nxdy_frcr_drwg_psbl_amt"))
+                            or _safe_float(entry.get("frcr_dncl_amt1"))
                             or _safe_float(entry.get("frcr_dncl_amt"))
                             or _safe_float(entry.get("ord_psbl_frcr_amt"))
                             or _safe_float(entry.get("frcr_evlu_amt"))
