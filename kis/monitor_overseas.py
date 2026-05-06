@@ -10,8 +10,39 @@ from config import OS_STOP_LOSS, OS_TRAIL_DROP
 from strategy_overseas import check_qqq_panic, get_overseas_daily
 
 
-# ticker -> {peak_price, entry_date, panic_reduced}
+# ticker -> {peak_price, entry_date, panic_reduced, trail_drop, atr_pct}
 _state: dict = {}
+
+
+def _compute_adaptive_trail(ticker: str, exchange: str) -> float:
+    """v4.0: 종목 ATR 기반 동적 trail 폭 (7~13% 사이).
+
+    저변동 종목은 빠르게 잡고, 고변동 종목은 풀백 견딤.
+    """
+    try:
+        from config import OS_TRAIL_ATR_MULT, OS_TRAIL_MIN, OS_TRAIL_MAX
+    except ImportError:
+        return OS_TRAIL_DROP  # fallback to fixed
+    candles = get_overseas_daily(ticker, exchange, count=20)
+    if len(candles) < 14:
+        return OS_TRAIL_DROP
+    # 14일 ATR 근사
+    atrs = []
+    for i in range(min(14, len(candles) - 1)):
+        h = candles[i]["high"]
+        l = candles[i]["low"]
+        prev_c = candles[i + 1]["close"]
+        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        atrs.append(tr)
+    if not atrs:
+        return OS_TRAIL_DROP
+    atr = sum(atrs) / len(atrs)
+    cur_close = candles[0]["close"]
+    if cur_close <= 0:
+        return OS_TRAIL_DROP
+    atr_pct = atr / cur_close
+    trail = atr_pct * OS_TRAIL_ATR_MULT
+    return max(OS_TRAIL_MIN, min(OS_TRAIL_MAX, trail))
 
 
 def get_current_price(ticker: str, exchange: str) -> float:
@@ -50,9 +81,13 @@ def unregister_os(ticker: str):
     _state.pop(ticker, None)
 
 
-def _ensure(ticker, pos):
+def _ensure(ticker, pos, exchange=None):
     if ticker not in _state:
         register_os_position(ticker, pos["buy_price"])
+    # v4.0: trail_drop 가 아직 계산 안 되었으면 ATR 기반으로 계산
+    st = _state.get(ticker, {})
+    if "trail_drop" not in st and exchange:
+        st["trail_drop"] = _compute_adaptive_trail(ticker, exchange)
 
 
 def check_overseas_positions(positions: dict) -> list:
@@ -67,7 +102,7 @@ def check_overseas_positions(positions: dict) -> list:
         if current_price == 0:
             continue
 
-        _ensure(ticker, pos)
+        _ensure(ticker, pos, exchange=pos["exchange"])
         st = _state[ticker]
         if current_price > st["peak"]:
             st["peak"] = current_price
@@ -83,13 +118,14 @@ def check_overseas_positions(positions: dict) -> list:
                 unregister_os(ticker)
             continue
 
-        # 2) 트레일링 (수익 구간에서만)
+        # 2) 트레일링 (수익 구간에서만, v4.0 적응형)
         if pnl > 0:
             drop = (current_price - st["peak"]) / st["peak"]
-            if drop <= -OS_TRAIL_DROP:
+            adaptive_trail = st.get("trail_drop", OS_TRAIL_DROP)
+            if drop <= -adaptive_trail:
                 if ot.sell_overseas(ticker, pos["name"], pos["exchange"],
                                     pos["qty"], pos["buy_price"],
-                                    f"트레일링 ({pnl*100:+.2f}% 고점-{abs(drop)*100:.1f}%)"):
+                                    f"트레일 ({pnl*100:+.2f}% 고점-{abs(drop)*100:.1f}%, ATR기반 {adaptive_trail*100:.1f}%)"):
                     closed.append(ticker)
                     unregister_os(ticker)
                 continue

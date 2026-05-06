@@ -61,16 +61,32 @@ def _hold_days(ticker: str) -> int:
 
 
 def check_positions(positions: dict) -> list:
-    """장중 실시간 체크 — SWING 포지션에 대한 트레일링/하드 손절"""
+    """장중 실시간 체크 — SWING 트레일링/손절 + CLENOW 비상 손절."""
     closed = []
     for ticker, pos in list(positions.items()):
-        # CLENOW 전략은 일봉 MA50 이탈로만 청산 — 장중 트레일링 스킵
-        if pos.get("strategy_type") == "CLENOW":
-            continue
         current_price = get_current_price(ticker)
         if current_price == 0:
             continue
 
+        # v4.0: CLENOW 모드 비상 손절 (-7% 블랙스완 방어)
+        if pos.get("strategy_type") == "CLENOW":
+            try:
+                from config import DOM_CLENOW_EMERGENCY_SL
+            except ImportError:
+                DOM_CLENOW_EMERGENCY_SL = 0.07
+            buy = pos.get("buy_price", 0)
+            if buy > 0:
+                pnl = (current_price - buy) / buy
+                if pnl <= -DOM_CLENOW_EMERGENCY_SL:
+                    if trader.sell_market(
+                        ticker, pos["name"], pos["qty"], buy,
+                        f"비상손절 ({pnl*100:+.2f}%)"
+                    ):
+                        closed.append(ticker)
+                        unregister(ticker)
+            continue  # CLENOW: 비상 손절 외에는 EOD MA50 만
+
+        # SWING 모드: 트레일링 + 하드 손절
         _ensure_stop(ticker, pos)
         stop = _stops[ticker]
         should_close, reason = stop.update_intraday(current_price)
