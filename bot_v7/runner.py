@@ -683,7 +683,7 @@ def main():
     n = len(cfg.SYMBOLS)
     sym_label = ", ".join(_short(s) for s in cfg.SYMBOLS)
     tg.send(
-        f"🚀 v15 시작 — 10-component 신호 검증 ({n}종)\n"
+        f"🚀 v5.0 시작 — Mean Reversion primary ({n}종, mode={cfg.STRATEGY_MODE})\n"
         f"봇: {bot_label}\n"
         f"심볼: {sym_label} | 잔고: ${eq0:,.2f}\n"
         f"━ D 전략 (점수×tier 마진) ━\n"
@@ -776,45 +776,49 @@ def main():
                         last_loss = _last_loss_ts.get(symbol, 0.0)
                         if time.time() - last_loss > cfg.COOLDOWN_BARS_LOSS * 15 * 60:
                             snap = ai.market_snapshot(df15, df1h, df4h)
-                            # v14/v15: 8-component 신호 검증 데이터 수집
-                            cross_agree = _compute_cross_agree(symbol, symbol_trends)
-                            funding_hist = ex.get_funding_history(symbol, count=4)
-                            funding_now = funding_hist[0] if funding_hist else None
-                            funding_24h = funding_hist[3] if (funding_hist and len(funding_hist) >= 4) else None
-                            oi_info = ex.get_open_interest_trend(symbol)
-                            oi_change_4h = oi_info["change_pct"] if oi_info else None
-                            # 같은 기간(약 4h) 가격 변화 — 4H 봉 1개로 근사
-                            try:
-                                if len(df4h) >= 2:
-                                    p_now = float(df4h.iloc[-1].close)
-                                    p_past = float(df4h.iloc[-2].close)
-                                    price_change_4h = (p_now - p_past) / p_past if p_past > 0 else None
-                                else:
-                                    price_change_4h = None
-                            except Exception:
-                                price_change_4h = None
 
-                            # v4.1: 뉴스 sentiment (CryptoPanic 기반)
-                            try:
-                                from . import news as _news
-                                news_sent = _news.get_news_sentiment(symbol)
-                            except Exception:
-                                news_sent = None
-                            sig = strat.evaluate_entry(
-                                df15, df1h, df4h,
-                                funding_8h_pct=funding_now,
-                                funding_24h_ago=funding_24h,
-                                cross_agree=cross_agree,
-                                oi_change_4h=oi_change_4h,
-                                price_change_4h=price_change_4h,
-                                news_sentiment=news_sent,
-                            )
+                            # v5.0: STRATEGY_MODE 별 진입 평가
+                            mode = cfg.STRATEGY_MODE
+                            sig = None
+
+                            if mode in ("D", "BOTH"):
+                                # v14/v15: 8-component 신호 검증 데이터 수집
+                                cross_agree = _compute_cross_agree(symbol, symbol_trends)
+                                funding_hist = ex.get_funding_history(symbol, count=4)
+                                funding_now = funding_hist[0] if funding_hist else None
+                                funding_24h = funding_hist[3] if (funding_hist and len(funding_hist) >= 4) else None
+                                oi_info = ex.get_open_interest_trend(symbol)
+                                oi_change_4h = oi_info["change_pct"] if oi_info else None
+                                try:
+                                    if len(df4h) >= 2:
+                                        p_now = float(df4h.iloc[-1].close)
+                                        p_past = float(df4h.iloc[-2].close)
+                                        price_change_4h = (p_now - p_past) / p_past if p_past > 0 else None
+                                    else:
+                                        price_change_4h = None
+                                except Exception:
+                                    price_change_4h = None
+                                try:
+                                    from . import news as _news
+                                    news_sent = _news.get_news_sentiment(symbol)
+                                except Exception:
+                                    news_sent = None
+                                sig = strat.evaluate_entry(
+                                    df15, df1h, df4h,
+                                    funding_8h_pct=funding_now,
+                                    funding_24h_ago=funding_24h,
+                                    cross_agree=cross_agree,
+                                    oi_change_4h=oi_change_4h,
+                                    price_change_4h=price_change_4h,
+                                    news_sentiment=news_sent,
+                                )
+
+                            # v5.0 MR primary mode (또는 D 가 신호 없을 때 fallback)
+                            if not sig and mode in ("MR", "BOTH"):
+                                sig = strat.evaluate_mr_entry(df15, df4h)
+
                             if sig:
                                 _try_open(symbol, equity, sig, snap)
-                            else:
-                                mr_sig = strat.evaluate_mr_entry(df15, df4h)
-                                if mr_sig:
-                                    _try_open(symbol, equity, mr_sig, snap)
 
                     _maybe_run_regime(symbol, df15, df1h, df4h)
                 except Exception as sym_e:

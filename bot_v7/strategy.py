@@ -17,6 +17,12 @@ from backtest.strategies.strategy_mr import _check_signal as _mr_check_signal
 from backtest.strategies.strategy_mr import (
     ATR_STOP_MULT as MR_ATR_STOP, LEV as MR_LEV,
 )
+# v5.0 MR 강화판
+from backtest.strategies.strategy_mr_v5 import (
+    _check_signal_v5 as _mr_check_signal_v5,
+    tier_for_score as _mr_tier_for_score,
+    SCORE_MIN as _MR_SCORE_MIN,
+)
 
 
 def _leverage_for_score(score: float) -> float:
@@ -136,22 +142,29 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
 
 
 def evaluate_mr_entry(df_15m: pd.DataFrame, df_4h: pd.DataFrame) -> Optional[dict]:
-    """Mean-reversion (MR) entry: oversold/overbought BB + chop ADX.
+    """v5.0 Mean-reversion entry — score 기반 MR primary 전략.
 
-    Fires when D is silent — different alpha for sideways markets.
-    Returns same-shape signal dict as evaluate_entry (for unified handling).
+    BB 극단 + RSI 극단 + 거래량 스파이크 + 반전 캔들 = MR 신호.
+    score 50+ 통과시 진입. score 별 tier 사이즈.
     """
     if len(df_15m) < 60:
         return None
     row = df_15m.iloc[-1]
     row_h4 = df_4h.iloc[-1] if df_4h is not None and len(df_4h) > 0 else None
 
-    side, reason = _mr_check_signal(row, row_h4)
+    # v5: 점수 + side 한 번에 계산
+    side, reason, score = _mr_check_signal_v5(row, row_h4)
     if side == "none":
+        return None
+    if score < _MR_SCORE_MIN:
         return None
 
     atr = row.atr
     if pd.isna(atr) or atr <= 0:
+        return None
+
+    tier_label, tier_margin = _mr_tier_for_score(score)
+    if tier_label == "skip":
         return None
 
     if side == "long":
@@ -169,10 +182,12 @@ def evaluate_mr_entry(df_15m: pd.DataFrame, df_4h: pd.DataFrame) -> Optional[dic
 
     return {
         "side":        order_side,
-        "score":       0.0,           # MR doesn't use D's score
+        "score":       float(score),
         "leverage":    float(MR_LEV),
         "stop_price":  float(stop),
         "tp_price":    float(tp),
+        "tier":        f"mr_{tier_label}",
+        "mr_tier_margin": float(tier_margin),  # v5 tier 별 마진
         "entry_price": float(row.close),
         "atr_15m":     float(atr),
         "tag":         f"MR_{side}",
