@@ -399,13 +399,194 @@ def symbol_weight(*, bot_id: str, symbol: str,
 
 def all_symbol_weights(*, bot_id: str, days: int = 30,
                        min_trades: int = 3) -> dict[str, float]:
-    """모든 심볼의 weight 한 번에 계산. /weights 명령용."""
+    """모든 심볼의 weight 한 번에 계산."""
     stats = trade_stats(bot_id=bot_id, since_seconds=days * 86400)
     out: dict[str, float] = {}
     for sym in stats.get("by_symbol", {}).keys():
         out[sym] = symbol_weight(bot_id=bot_id, symbol=sym,
                                  days=days, min_trades=min_trades)
     return out
+
+
+def deep_diagnose(*, bot_id: str, days: int = 30) -> str:
+    """v4.2: AI 없이 순수 통계로 봇 진단. /diagnose 명령용.
+
+    분석 차원:
+      - 기본 통계 (n, win_rate, total_pnl)
+      - tier 별 (avg PnL 포함)
+      - 심볼별 (PnL 순)
+      - 청산 사유별 (TP/SL/trail 분포)
+      - 진입 점수: 승리 vs 패배 평균
+      - 방향 (long/short)
+      - 시간대 (KST 기준 6시간 단위)
+      - 핵심 인사이트 자동 도출 (룰 기반)
+    """
+    import json as _json
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+
+    trades = recent_trades(bot_id=bot_id, since_seconds=days * 86400, limit=10000)
+    if not trades:
+        return f"📊 진단 — 지난 {days}일 거래 없음"
+
+    n = len(trades)
+    wins = [t for t in trades if t["pnl"] >= 0]
+    losses = [t for t in trades if t["pnl"] < 0]
+    win_rate = len(wins) / n
+    total_pnl = sum(t["pnl"] for t in trades)
+
+    lines = [
+        f"📊 <b>봇 종합 진단</b> ({bot_id}, 지난 {days}일)",
+        f"━━━━━━━━━━━━━━━━━",
+        f"<b>기본</b>",
+        f"총 {n}건 / 승 {len(wins)} / 패 {len(losses)}",
+        f"승률 {win_rate*100:.1f}% / PnL {total_pnl:+.2f}",
+    ]
+
+    # tier 별
+    by_tier: dict[str, list] = {}
+    for t in trades:
+        ti = t.get("tier") or "?"
+        by_tier.setdefault(ti, []).append(t)
+    if by_tier:
+        lines.append("\n<b>Tier 별</b>")
+        order = ["high", "mid", "base", "probe", "micro", "mr", "?"]
+        for ti in order:
+            if ti not in by_tier:
+                continue
+            ts = by_tier[ti]
+            tn = len(ts)
+            tw = sum(1 for t in ts if t["pnl"] >= 0)
+            tp = sum(t["pnl"] for t in ts)
+            avg = tp / tn if tn else 0
+            wr = (tw / tn * 100) if tn else 0
+            icon = "🟢" if tp > 0 else ("⚪" if tp == 0 else "🔴")
+            lines.append(f"  {icon} {ti}: {tn}건 {wr:.0f}% PnL {tp:+.2f} (avg {avg:+.2f})")
+
+    # 심볼별
+    by_sym: dict[str, list] = {}
+    for t in trades:
+        sy = t.get("symbol") or "?"
+        by_sym.setdefault(sy, []).append(t)
+    if by_sym:
+        lines.append("\n<b>심볼별 (PnL 순)</b>")
+        items = sorted(by_sym.items(), key=lambda x: -sum(t["pnl"] for t in x[1]))
+        for sy, ts in items:
+            tn = len(ts)
+            tw = sum(1 for t in ts if t["pnl"] >= 0)
+            tp = sum(t["pnl"] for t in ts)
+            wr = (tw / tn * 100) if tn else 0
+            icon = "🟢" if tp > 0 else "🔴"
+            lines.append(f"  {icon} {sy}: {tn}건 {wr:.0f}% {tp:+.2f}")
+
+    # 방향 (long vs short)
+    long_t = [t for t in trades if str(t.get("side", "")).lower() in ("buy", "long")]
+    short_t = [t for t in trades if str(t.get("side", "")).lower() in ("sell", "short")]
+    if long_t or short_t:
+        lines.append("\n<b>방향</b>")
+        if long_t:
+            ln = len(long_t); lw = sum(1 for t in long_t if t["pnl"] >= 0)
+            lp = sum(t["pnl"] for t in long_t)
+            lines.append(f"  롱: {ln}건 {lw/ln*100:.0f}% {lp:+.2f}")
+        if short_t:
+            sn = len(short_t); sw = sum(1 for t in short_t if t["pnl"] >= 0)
+            sp = sum(t["pnl"] for t in short_t)
+            lines.append(f"  숏: {sn}건 {sw/sn*100:.0f}% {sp:+.2f}")
+
+    # 청산 사유
+    by_reason: dict[str, list] = {}
+    for t in trades:
+        r = t.get("reason") or "?"
+        by_reason.setdefault(r, []).append(t)
+    if by_reason:
+        lines.append("\n<b>청산 사유</b>")
+        for r, ts in sorted(by_reason.items(), key=lambda x: -len(x[1])):
+            tn = len(ts)
+            tp = sum(t["pnl"] for t in ts)
+            pct = tn / n * 100
+            lines.append(f"  {r}: {tn}건 ({pct:.0f}%) PnL {tp:+.2f}")
+
+    # 점수 비교
+    win_scores = [t.get("score") for t in wins if t.get("score")]
+    loss_scores = [t.get("score") for t in losses if t.get("score")]
+    if win_scores and loss_scores:
+        lines.append("\n<b>진입 점수</b>")
+        avg_win = sum(win_scores) / len(win_scores)
+        avg_loss = sum(loss_scores) / len(loss_scores)
+        diff = avg_win - avg_loss
+        lines.append(f"  승리 평균: {avg_win:.1f}")
+        lines.append(f"  패배 평균: {avg_loss:.1f}")
+        lines.append(f"  차이: {diff:+.1f} {'⚠️ 약함' if abs(diff) < 5 else '✅'}")
+
+    # 시간대 (KST)
+    by_hour_bucket: dict[str, list] = {}
+    for t in trades:
+        ts_unix = t.get("exit_ts") or t.get("ts") or 0
+        try:
+            dt = datetime.fromtimestamp(int(ts_unix), tz=timezone.utc).astimezone(KST)
+            h = dt.hour
+            if h < 6: bucket = "00~06"
+            elif h < 12: bucket = "06~12"
+            elif h < 18: bucket = "12~18"
+            else: bucket = "18~24"
+            by_hour_bucket.setdefault(bucket, []).append(t)
+        except Exception:
+            pass
+    if by_hour_bucket:
+        lines.append("\n<b>KST 시간대</b>")
+        for b in ["00~06", "06~12", "12~18", "18~24"]:
+            if b not in by_hour_bucket:
+                continue
+            ts = by_hour_bucket[b]
+            tn = len(ts); tw = sum(1 for t in ts if t["pnl"] >= 0)
+            tp = sum(t["pnl"] for t in ts)
+            wr = (tw / tn * 100) if tn else 0
+            lines.append(f"  {b}: {tn}건 {wr:.0f}% {tp:+.2f}")
+
+    # ── 자동 인사이트 (룰 기반) ────────────────────────────
+    insights = []
+    if win_rate < 0.40:
+        insights.append(f"⚠️ 승률 {win_rate*100:.0f}% — 50% 미만, 전략 검토 필요")
+    if total_pnl < 0:
+        worst_sym = min(by_sym.items(), key=lambda x: sum(t["pnl"] for t in x[1]))
+        insights.append(f"💸 최대 손실 심볼: {worst_sym[0]} → universe 제외 또는 가중치 ↓ 고려")
+    if win_scores and loss_scores:
+        if abs(avg_win - avg_loss) < 5:
+            insights.append("📉 점수가 승률 예측 거의 못함 → ENTRY_MIN_SCORE 상향 또는 score 시스템 검토")
+    sl_count = sum(1 for t in trades if "sl" in (t.get("reason") or "").lower())
+    if sl_count / n > 0.40:
+        insights.append(f"🔴 SL 비율 {sl_count/n*100:.0f}% — SL 너무 빡빡 / 진입 너무 빠름")
+    if long_t and short_t and len(long_t) >= 5 and len(short_t) >= 5:
+        long_wr = sum(1 for t in long_t if t["pnl"] >= 0) / len(long_t)
+        short_wr = sum(1 for t in short_t if t["pnl"] >= 0) / len(short_t)
+        if abs(long_wr - short_wr) > 0.20:
+            better = "롱" if long_wr > short_wr else "숏"
+            insights.append(f"📊 {better} 우세 — 약/강세장 편향. 4H ADX 페널티 강화 검토")
+    # 가장 부진 시간대
+    if by_hour_bucket:
+        hour_wr = []
+        for b, ts in by_hour_bucket.items():
+            if len(ts) >= 3:
+                wr = sum(1 for t in ts if t["pnl"] >= 0) / len(ts)
+                hour_wr.append((b, wr, len(ts)))
+        if hour_wr:
+            worst_hour = min(hour_wr, key=lambda x: x[1])
+            if worst_hour[1] < 0.30:
+                insights.append(f"🕐 {worst_hour[0]} 시간대 부진 ({worst_hour[1]*100:.0f}% / {worst_hour[2]}건) — 진입 회피 검토")
+    if "high" in by_tier and len(by_tier["high"]) >= 3:
+        ts = by_tier["high"]
+        wr = sum(1 for t in ts if t["pnl"] >= 0) / len(ts)
+        if wr < 0.50:
+            insights.append("🎯 high tier (점수 90+) 도 승률 50% 미만 → score 시스템 신뢰도 ↓")
+
+    if insights:
+        lines.append("\n<b>🧠 자동 인사이트</b>")
+        for ins in insights:
+            lines.append(f"  • {ins}")
+    else:
+        lines.append("\n✅ 특별한 이상 패턴 없음")
+
+    return "\n".join(lines)
 
 
 def update_proposal_status(proposal_id: int, status: str) -> bool:

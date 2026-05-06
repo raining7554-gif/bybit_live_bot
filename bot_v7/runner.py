@@ -498,6 +498,14 @@ def _setup_handlers():
         tg.send(ai.get_symbol_stats_text(days=7))
         tg.send(ai.get_symbol_stats_text(days=30))
 
+    def diagnose_cmd():
+        """v4.2: AI 없이 순수 통계 깊은 분석. /diagnose."""
+        try:
+            from intelligence import journal as _ij
+            tg.send(_ij.deep_diagnose(bot_id=ai.BOT_ID, days=30))
+        except Exception as e:
+            tg.send(f"⚠️ /diagnose 오류: {e}")
+
     def weights_cmd():
         """v15 Tier 2: 현재 적용 중인 심볼별 자동 가중치 표시."""
         try:
@@ -535,6 +543,7 @@ def _setup_handlers():
         "/lessons": lessons_cmd,
         "/symbols": symbols_cmd,
         "/weights": weights_cmd,
+        "/diagnose": diagnose_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }

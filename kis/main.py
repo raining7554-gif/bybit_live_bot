@@ -651,11 +651,24 @@ def main():
 
         telegram.send("\n".join(lines), dedup_sec=10)
 
+    def cmd_diagnose():
+        """v4.2: 순수 통계 깊은 분석 (AI 없이)."""
+        if _journal is None:
+            telegram.send("intelligence 모듈 미로드")
+            return
+        for bid in _all_kis_bot_ids():
+            try:
+                msg = _journal.deep_diagnose(bot_id=bid, days=30)
+                telegram.send(msg, dedup_sec=30)
+            except Exception as e:
+                telegram.send(f"⚠️ /diagnose {bid} 오류: {e}")
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
         "/propose": cmd_propose,
         "/symbols": cmd_symbols,
+        "/diagnose": cmd_diagnose,
     }
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
