@@ -676,6 +676,15 @@ def main():
         except Exception as e:
             telegram.send(f"⚠️ /news 오류: {type(e).__name__}: {e}")
 
+    def cmd_scan_us():
+        """v6.1: US 유니버스 진단 — 종목별 진입 탈락 사유."""
+        try:
+            telegram.send("🔍 US 스캔 진단 중... (유니버스 55종 일봉 조회 ~30초)")
+            d = scanner_overseas.diagnose_overseas()
+            telegram.send(scanner_overseas.format_diagnose_msg(d), dedup_sec=10)
+        except Exception as e:
+            telegram.send(f"⚠️ /scan_us 오류: {type(e).__name__}: {e}")
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
@@ -683,6 +692,7 @@ def main():
         "/symbols": cmd_symbols,
         "/diagnose": cmd_diagnose,
         "/news":    cmd_news,
+        "/scan_us": cmd_scan_us,
     }
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
