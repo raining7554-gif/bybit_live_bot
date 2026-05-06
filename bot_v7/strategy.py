@@ -71,7 +71,8 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
                    funding_24h_ago: float | None = None,
                    cross_agree: float | None = None,
                    oi_change_4h: float | None = None,
-                   price_change_4h: float | None = None) -> Optional[dict]:
+                   price_change_4h: float | None = None,
+                   news_sentiment: float | None = None) -> Optional[dict]:
     """v15 entry. 10-component score (4 base + 6 multipliers).
 
     multipliers: HTF ADX, funding sanity, funding trend, cross-asset,
@@ -91,6 +92,7 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
         cross_agree=cross_agree,
         oi_change_4h=oi_change_4h,
         price_change_4h=price_change_4h,
+        news_sentiment=news_sentiment,
     )
     if direction == "none" or score < cfg.ENTRY_MIN_SCORE:
         return None

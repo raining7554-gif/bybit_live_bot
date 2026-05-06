@@ -64,7 +64,8 @@ def _signal_strength(row, row_h1, row_h4, *,
                      funding_24h_ago: float | None = None,
                      cross_agree: float | None = None,
                      oi_change_4h: float | None = None,
-                     price_change_4h: float | None = None) -> tuple[float, str]:
+                     price_change_4h: float | None = None,
+                     news_sentiment: float | None = None) -> tuple[float, str]:
     """Returns (score 0..100, direction).
 
     v15 — 10-component score:
@@ -225,9 +226,35 @@ def _signal_strength(row, row_h1, row_h4, *,
         else:
             oi_mult = 1.0
 
-    # 기하평균 — 6개 멀티 (1/6승). 하나가 매우 낮아도 다른 게 보정.
+    # 7) News sentiment (CryptoPanic 기반)
+    if news_sentiment is None:
+        news_mult = 1.0
+    else:
+        # -1 (강한 약세) ~ +1 (강한 강세)
+        if direction == "long":
+            if news_sentiment >= 0.3:
+                news_mult = 1.0  # 긍정 뉴스 + 롱 = OK
+            elif news_sentiment >= 0:
+                news_mult = 0.95
+            elif news_sentiment >= -0.3:
+                news_mult = 0.85
+            else:
+                news_mult = 0.65  # 강한 부정 + 롱 = 강한 페널티
+        elif direction == "short":
+            if news_sentiment <= -0.3:
+                news_mult = 1.0  # 부정 뉴스 + 숏 = OK
+            elif news_sentiment <= 0:
+                news_mult = 0.95
+            elif news_sentiment <= 0.3:
+                news_mult = 0.85
+            else:
+                news_mult = 0.65  # 강한 긍정 + 숏 = 강한 페널티
+        else:
+            news_mult = 1.0
+
+    # 기하평균 — 7개 멀티 (1/7승). 하나가 매우 낮아도 다른 게 보정.
     combined_mult = (htf_mult * fund_mult * fund_trend_mult *
-                     cross_mult * vol_mult * oi_mult) ** (1.0 / 6.0)
+                     cross_mult * vol_mult * oi_mult * news_mult) ** (1.0 / 7.0)
 
     score = base_score * combined_mult
     return score, direction
