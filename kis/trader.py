@@ -52,7 +52,9 @@ def get_account_balance() -> dict:
 
 
 def buy_market(ticker: str, name: str, reason: str = "스윙 진입",
-               expected_price: int | None = None) -> dict | None:
+               expected_price: int | None = None,
+               atr_pct: float | None = None) -> dict | None:
+    """v4.0: atr_pct 제공시 변동성 기반 리스크 패리티 사이징 적용."""
     acc_no, acc_prod = _acc_parts()
     tr_id = "VTTC0802U" if IS_PAPER else "TTTC0802U"
 
@@ -84,6 +86,30 @@ def buy_market(ticker: str, name: str, reason: str = "스윙 진입",
         position_pct = DOM_SMALL_SEED_POSITION_PCT if DOM_SMALL_SEED_MODE else DOM_POSITION_PCT
     except ImportError:
         position_pct = DOM_POSITION_PCT
+
+    # v4.0: 변동성 기반 사이즈 조정 (Risk Parity)
+    try:
+        from config import RISK_PARITY_ENABLED, TARGET_DAILY_RISK_PCT, MIN_POSITION_PCT
+        if RISK_PARITY_ENABLED and atr_pct and atr_pct > 0.005:
+            vol_adj_pct = TARGET_DAILY_RISK_PCT / atr_pct
+            position_pct = min(position_pct, vol_adj_pct)
+            position_pct = max(MIN_POSITION_PCT, position_pct)
+    except ImportError:
+        pass
+
+    # v4.0 Phase 3: 심볼별 자동 가중치 (지난 30일 성과 기반)
+    if _journal is not None:
+        try:
+            sw = _journal.symbol_weight(
+                bot_id=_bot_id_for_strategy(), symbol=ticker, days=30,
+            )
+            if sw and 0.3 <= sw <= 1.5:
+                position_pct *= sw
+                if abs(sw - 1.0) > 0.05:
+                    print(f"[TRADER] {ticker} 심볼 가중치 {sw:.2f}x 적용")
+        except Exception as e:
+            print(f"[TRADER] symbol_weight err: {e}")
+
     target = min(int(total * position_pct), available)
     qty = target // current_price
 

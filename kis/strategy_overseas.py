@@ -145,8 +145,23 @@ def check_os_entry(ticker: str, exchange: str, name: str = "") -> tuple:
     avg_vol20   = sum(vols[1:21]) / 20 if len(vols) >= 21 else sum(vols) / len(vols)
     high_20     = max(highs[1:21]) if len(highs) >= 21 else max(highs[1:])
 
+    # v4.0: 14일 ATR% 계산 (변동성 사이징용)
+    lows = [c["low"] for c in candles]
+    atr_pct = 0.02  # default 2%
+    if len(candles) >= 15:
+        trs = []
+        for i in range(min(14, len(candles) - 1)):
+            h = highs[i]
+            l = lows[i]
+            pc = closes[i + 1]
+            if h > 0 and l > 0 and pc > 0:
+                trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        if trs and today_close > 0:
+            atr_pct = (sum(trs) / len(trs)) / today_close
+
     metrics = {
         "ma20": ma20, "ma50": ma50, "ma200": ma200, "rsi": rsi,
+        "atr_pct": atr_pct,  # v4.0
         "close": today_close, "volume": today_vol, "avg_vol20": avg_vol20,
     }
 

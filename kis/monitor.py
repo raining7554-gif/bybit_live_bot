@@ -60,17 +60,82 @@ def _hold_days(ticker: str) -> int:
     return days
 
 
+def _check_partial_tp(ticker: str, pos: dict, current_price: float) -> bool:
+    """v4.0: 단계별 부분 익절 (+15/30/50%).
+
+    Returns True if position fully closed (last partial = whole remaining).
+    """
+    try:
+        from config import PARTIAL_TP_LEVELS
+    except ImportError:
+        return False
+    buy = pos.get("buy_price", 0)
+    qty = pos.get("qty", 0)
+    if buy <= 0 or qty <= 0:
+        return False
+    pnl = (current_price - buy) / buy
+
+    # 처음이면 original_qty + tp_levels_hit 초기화
+    if "original_qty" not in pos:
+        pos["original_qty"] = qty
+    if "tp_levels_hit" not in pos:
+        pos["tp_levels_hit"] = []
+
+    for level_pct, sell_ratio in PARTIAL_TP_LEVELS:
+        if level_pct in pos["tp_levels_hit"]:
+            continue
+        if pnl >= level_pct:
+            # 원래 qty 의 sell_ratio 만큼 청산
+            sell_qty = max(1, int(pos["original_qty"] * sell_ratio))
+            sell_qty = min(sell_qty, pos["qty"])  # 남은 거 초과 X
+            if sell_qty <= 0:
+                continue
+            if trader.sell_market(
+                ticker, pos.get("name", ticker), sell_qty, buy,
+                f"부분익절 +{level_pct*100:.0f}% ({pnl*100:+.2f}%)"
+            ):
+                pos["qty"] -= sell_qty
+                pos["tp_levels_hit"].append(level_pct)
+                if pos["qty"] <= 0:
+                    return True  # 완전 청산
+            break  # 한 번에 한 레벨만
+    return False
+
+
 def check_positions(positions: dict) -> list:
-    """장중 실시간 체크 — SWING 포지션에 대한 트레일링/하드 손절"""
+    """장중 실시간 체크 — SWING 트레일링/손절 + CLENOW 비상 손절 + 단계별 부분 익절."""
     closed = []
     for ticker, pos in list(positions.items()):
-        # CLENOW 전략은 일봉 MA50 이탈로만 청산 — 장중 트레일링 스킵
-        if pos.get("strategy_type") == "CLENOW":
-            continue
         current_price = get_current_price(ticker)
         if current_price == 0:
             continue
 
+        # v4.0: 단계별 부분 익절 (모든 모드 적용)
+        fully_closed = _check_partial_tp(ticker, pos, current_price)
+        if fully_closed:
+            closed.append(ticker)
+            unregister(ticker)
+            continue
+
+        # v4.0: CLENOW 모드 비상 손절 (-7% 블랙스완 방어)
+        if pos.get("strategy_type") == "CLENOW":
+            try:
+                from config import DOM_CLENOW_EMERGENCY_SL
+            except ImportError:
+                DOM_CLENOW_EMERGENCY_SL = 0.07
+            buy = pos.get("buy_price", 0)
+            if buy > 0:
+                pnl = (current_price - buy) / buy
+                if pnl <= -DOM_CLENOW_EMERGENCY_SL:
+                    if trader.sell_market(
+                        ticker, pos["name"], pos["qty"], buy,
+                        f"비상손절 ({pnl*100:+.2f}%)"
+                    ):
+                        closed.append(ticker)
+                        unregister(ticker)
+            continue  # CLENOW: 비상 손절 외에는 EOD MA50 만
+
+        # SWING 모드: 트레일링 + 하드 손절
         _ensure_stop(ticker, pos)
         stop = _stops[ticker]
         should_close, reason = stop.update_intraday(current_price)

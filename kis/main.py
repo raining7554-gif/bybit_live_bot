@@ -22,7 +22,7 @@ from config import (
     OS_SCAN_TIME_START, OS_SCAN_TIME_END, OS_EOD_CHECK, OS_MAX_POSITIONS,
     SCAN_INTERVAL_SEC, MONITOR_INTERVAL_SEC, SUMMARY_INTERVAL_SEC,
     ACCOUNT_NO, IS_PAPER,
-    DAILY_LOSS_CIRCUIT,
+    DAILY_LOSS_CIRCUIT, TOTAL_DAILY_LOSS_CIRCUIT,
     DOM_STRATEGY_MODE, OS_STRATEGY_MODE,
     OS_LEVERAGED_BENCHMARK, OS_LEVERAGED_BULL, OS_LEVERAGED_BEAR,
     OS_LEVERAGED_SIGNAL_MA, OS_LEVERAGED_AUX_MA,
@@ -321,6 +321,30 @@ def _format_health_report(results: dict) -> str:
 
 
 # ═══════════════════════════════════════════════════════
+# v4.0: 통합 잔고 (KRW+USD 환산)
+# ═══════════════════════════════════════════════════════
+def get_total_equity_krw() -> int:
+    """KRW + USD (환산) 합계 잔고 — 통합 서킷 브레이커용."""
+    krw = 0
+    try:
+        bal = get_balance_info()
+        if bal:
+            krw = bal.get("total_eval", 0)
+    except Exception:
+        pass
+    usd_krw = 0
+    try:
+        import trader_overseas as _ot
+        os_bal = _ot.get_overseas_balance()
+        usd_avail = os_bal.get("available_usd", 0)
+        # 대략 환율 1450 (정확하지 않아도 됨, 비율만 보면 OK)
+        usd_krw = int(usd_avail * 1450)
+    except Exception:
+        pass
+    return krw + usd_krw
+
+
+# ═══════════════════════════════════════════════════════
 # 메인
 # ═══════════════════════════════════════════════════════
 def main():
@@ -382,6 +406,9 @@ def main():
     dom_pos, os_pos = {}, {}
     last_dom_scan = last_os_scan = None
     last_dom_mon = last_os_mon = None
+    # v4.0: 통합 서킷 브레이커 상태
+    total_circuit_tripped = False
+    total_day_anchor_krw = 0  # 시작 시점 KRW+USD 합계 (KRW 환산)
     last_summary = None
     dom_eod_done = False
     os_eod_done = False
@@ -643,6 +670,27 @@ def main():
         except Exception as e:
             print(f"[MAIN] poll_commands err: {e}")
 
+        # ════ v4.0 통합 서킷 브레이커 (KRW+USD 합계 -7% 시 양쪽 정지) ═══
+        # 매일 09:00 첫 진입 시점에 anchor 갱신
+        if t_hm == "09:00" and total_day_anchor_krw == 0:
+            total_day_anchor_krw = get_total_equity_krw()
+            total_circuit_tripped = False
+        # 매 5분마다 한 번 체크 (운영시간 내만)
+        if (not total_circuit_tripped and total_day_anchor_krw > 0
+                and now.minute % 5 == 0
+                and (is_dom_market_hours() or is_os_market_hours())):
+            current_total = get_total_equity_krw()
+            if current_total > 0:
+                loss_pct = (current_total - total_day_anchor_krw) / total_day_anchor_krw
+                if loss_pct <= -TOTAL_DAILY_LOSS_CIRCUIT:
+                    total_circuit_tripped = True
+                    telegram.send_force(
+                        f"🛑 <b>통합 서킷 발동 (KRW+USD)</b>\n"
+                        f"총 잔고 손실 {loss_pct*100:+.2f}% ≤ "
+                        f"-{TOTAL_DAILY_LOSS_CIRCUIT*100:.0f}%\n"
+                        f"양쪽 시장 신규 진입 전부 중단"
+                    )
+
         # ════ 일요일 자정 자동 주간 회고 ════════════════════════
         if (_agent is not None
                 and now.weekday() == 6
@@ -695,6 +743,7 @@ def main():
             else:
                 max_pos = DOM_MAX_POSITIONS
             if (is_dom_scan_time() and not circuit_tripped
+                    and not total_circuit_tripped
                     and len(dom_pos) < max_pos):
                 if elapsed(last_dom_scan) >= SCAN_INTERVAL_SEC:
                     try:
@@ -728,6 +777,7 @@ def main():
                             c["ticker"], c["name"],
                             reason=c.get("reason", f"[{DOM_STRATEGY_MODE}] 진입"),
                             expected_price=c.get("close") or c.get("price"),
+                            atr_pct=c.get("atr_pct"),  # v4.0 변동성 사이징
                         )
                         if res:
                             res["strategy_type"] = DOM_STRATEGY_MODE.upper()
@@ -755,7 +805,8 @@ def main():
             # ─── Leveraged Regime 전략 ─────────────────
             if OS_STRATEGY_MODE == "leveraged":
                 # 스캔 시간대에 1회만 체제 체크 (중복 실행 방지용 체제 플래그)
-                if is_os_scan_time() and elapsed(last_os_scan) >= SCAN_INTERVAL_SEC:
+                if (is_os_scan_time() and not total_circuit_tripped
+                        and elapsed(last_os_scan) >= SCAN_INTERVAL_SEC):
                     try:
                         import strategy_leveraged
                         bal = trader_overseas.get_overseas_balance()
@@ -813,7 +864,8 @@ def main():
                     last_os_mon = now
 
                 # 진입 스캔 (22:45 ~ 23:15)
-                if is_os_scan_time() and len(os_pos) < OS_MAX_POSITIONS:
+                if (is_os_scan_time() and not total_circuit_tripped
+                        and len(os_pos) < OS_MAX_POSITIONS):
                     if elapsed(last_os_scan) >= SCAN_INTERVAL_SEC:
                         try:
                             cands = scanner_overseas.scan_overseas_candidates(
@@ -828,6 +880,7 @@ def main():
                             res = trader_overseas.buy_overseas(
                                 c["ticker"], c["name"], c["exchange"],
                                 reason=f"[{c.get('regime','')}] {c['reason']}",
+                                atr_pct=c.get("atr_pct"),  # v4.0
                             )
                             if res:
                                 os_pos[c["ticker"]] = res
