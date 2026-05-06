@@ -405,11 +405,117 @@ def main():
                 )
                 telegram.send(msg, dedup_sec=60)
 
+    def cmd_balance():
+        """잔고 조회 진단 — 실패시 정확한 KIS API 응답 메시지 표시."""
+        def _sf(v, default=0.0):
+            if v is None or v == "":
+                return default
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return default
+
+        parts = ACCOUNT_NO.split("-")
+        acc_no = parts[0] if parts else ""
+        acc_prod = parts[1] if len(parts) > 1 else "01"
+        masked = (acc_no[:3] + "***" + acc_no[-2:]) if len(acc_no) >= 5 else "?"
+
+        lines = [
+            "🔍 <b>잔고 진단</b>",
+            f"계좌: {masked}-{acc_prod}",
+            f"IS_PAPER: {IS_PAPER}",
+            f"len(CANO)={len(acc_no)} parts={len(parts)}",
+            "─────────",
+        ]
+
+        # 1) 국내 잔고
+        try:
+            tr_id = "VTTC8434R" if IS_PAPER else "TTTC8434R"
+            data = api.get(
+                "/uapi/domestic-stock/v1/trading/inquire-balance",
+                tr_id,
+                {
+                    "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
+                    "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02",
+                    "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N",
+                    "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00",
+                    "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+                },
+            )
+            rt_cd = data.get("rt_cd", "?")
+            msg1 = data.get("msg1", "")[:120]
+            msg_cd = data.get("msg_cd", "")
+            if rt_cd == "0":
+                o = data.get("output2", [{}])[0]
+                lines.append(f"✅ 국내 ({tr_id})")
+                lines.append(f"  총평가: ₩{int(o.get('tot_evlu_amt', 0)):,}")
+                lines.append(f"  주문가능: ₩{int(o.get('prvs_rcdl_excc_amt', 0)):,}")
+            else:
+                lines.append(f"❌ 국내 ({tr_id})")
+                lines.append(f"  rt_cd={rt_cd} msg_cd={msg_cd}")
+                lines.append(f"  msg: {msg1}")
+        except Exception as e:
+            lines.append(f"❌ 국내 EXC: {type(e).__name__}: {str(e)[:100]}")
+
+        # 2) 해외 잔고 (CTRP6504R)
+        try:
+            tr_id = "VTRP6504R" if IS_PAPER else "CTRP6504R"
+            data = api.get(
+                "/uapi/overseas-stock/v1/trading/inquire-present-balance",
+                tr_id,
+                {
+                    "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
+                    "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840",
+                    "TR_MKET_CD": "00", "INQR_DVSN_CD": "00",
+                },
+            )
+            rt_cd = data.get("rt_cd", "?")
+            msg1 = data.get("msg1", "")[:120]
+            if rt_cd == "0":
+                o3 = data.get("output3", {})
+                lines.append(f"✅ 해외종합 ({tr_id})")
+                lines.append(f"  총자산: ${_sf(o3.get('tot_asst_amt')):.2f}")
+                lines.append(f"  외화예치1: ${_sf(o3.get('frcr_dncl_amt1')):.2f}")
+                lines.append(f"  외화예치2: ${_sf(o3.get('frcr_dncl_amt')):.2f}")
+            else:
+                lines.append(f"❌ 해외종합 ({tr_id})")
+                lines.append(f"  rt_cd={rt_cd} msg: {msg1}")
+        except Exception as e:
+            lines.append(f"❌ 해외종합 EXC: {type(e).__name__}: {str(e)[:100]}")
+
+        # 3) 해외 매수가능 (JTTT3007R)
+        try:
+            tr_id = "VTTT3007R" if IS_PAPER else "JTTT3007R"
+            data = api.get(
+                "/uapi/overseas-stock/v1/trading/inquire-psamount",
+                tr_id,
+                {
+                    "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
+                    "OVRS_EXCG_CD": "NASD", "OVRS_ORD_UNPR": "0",
+                    "ITEM_CD": "",
+                },
+            )
+            rt_cd = data.get("rt_cd", "?")
+            msg1 = data.get("msg1", "")[:120]
+            if rt_cd == "0":
+                o = data.get("output", {})
+                lines.append(f"✅ 매수가능 ({tr_id})")
+                lines.append(f"  ord_psbl_frcr: ${_sf(o.get('ord_psbl_frcr_amt')):.2f}")
+                lines.append(f"  ovrs_ord_psbl: ${_sf(o.get('ovrs_ord_psbl_amt')):.2f}")
+            else:
+                lines.append(f"❌ 매수가능 ({tr_id})")
+                lines.append(f"  rt_cd={rt_cd} msg: {msg1}")
+        except Exception as e:
+            lines.append(f"❌ 매수가능 EXC: {type(e).__name__}: {str(e)[:100]}")
+
+        telegram.send("\n".join(lines), dedup_sec=10)
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
         "/propose": cmd_propose,
         "/symbols": cmd_symbols,
+        "/balance": cmd_balance,
     }
     last_weekly_review_kst_date = ""
 
