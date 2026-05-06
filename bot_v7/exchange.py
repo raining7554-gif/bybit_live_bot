@@ -190,6 +190,34 @@ _cache: dict[tuple[str, str], tuple[pd.DataFrame, float]] = {}
 _CACHE_TTL = {"15": cfg.CACHE_15M_SEC, "60": cfg.CACHE_1H_SEC,
               "240": cfg.CACHE_4H_SEC}
 
+# v14: 펀딩 레이트 캐시 (8시간 funding interval, 30분 캐시)
+_funding_cache: dict[str, tuple[float, float]] = {}
+_FUNDING_CACHE_TTL = 1800  # 30분
+
+
+def get_funding_rate(symbol: str) -> Optional[float]:
+    """현재 8시간 펀딩 레이트 (소수점 비율, 예: 0.0001 = 0.01%/8h).
+
+    None 반환 = 조회 실패. 신호 점수 계산시 None 이면 페널티 없음 (보수적).
+    """
+    now = time.time()
+    if symbol in _funding_cache:
+        rate, ts = _funding_cache[symbol]
+        if now - ts < _FUNDING_CACHE_TTL:
+            return rate
+    try:
+        r = session().get_funding_rate_history(
+            category="linear", symbol=symbol, limit=1,
+        )
+        rows = r.get("result", {}).get("list", [])
+        if rows:
+            rate = float(rows[0].get("fundingRate", 0))
+            _funding_cache[symbol] = (rate, now)
+            return rate
+    except Exception as e:
+        print(f"[funding {symbol}] err: {e}", flush=True)
+    return None
+
 
 def get_ohlcv_cached(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
     now = time.time()

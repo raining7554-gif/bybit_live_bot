@@ -104,6 +104,9 @@ def add_basic_4h(df: pd.DataFrame) -> pd.DataFrame:
     df["atr"] = atr(df, 14)
     df["atr_pct"] = df["atr"] / df["close"]
     df["atr_pct_pctile"] = df["atr_pct"].rolling(120).rank(pct=True)
+    # v14: 4H ADX 추가 (HTF 모멘텀 확인용)
+    a, dp, dm = adx_di(df, 14)
+    df["adx"], df["di_plus"], df["di_minus"] = a, dp, dm
     return df
 
 

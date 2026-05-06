@@ -66,9 +66,13 @@ def compute_indicators(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
 
 
 def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
-                   df_4h: pd.DataFrame) -> Optional[dict]:
-    """v8 entry. RSI directional check REMOVED. Score >= 55 + 4H bias (EMA50)
-    + 15m candle alignment.
+                   df_4h: pd.DataFrame,
+                   funding_8h_pct: float | None = None,
+                   cross_agree: float | None = None) -> Optional[dict]:
+    """v14 entry. 8-component score (4 base + 4 multipliers).
+
+    funding_8h_pct: 현재 펀딩 레이트 (소수점 비율). None = 페널티 없음.
+    cross_agree: 다른 심볼들과 4H 추세 일치도 (0~1). None = 페널티 없음.
     """
     if len(df_15m) < 60 or len(df_1h) < 60 or len(df_4h) < 60:
         return None
@@ -77,7 +81,11 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
     row_h1 = df_1h.iloc[-1]
     row_h4 = df_4h.iloc[-1]
 
-    score, direction = _signal_strength(row, row_h1, row_h4)
+    score, direction = _signal_strength(
+        row, row_h1, row_h4,
+        funding_8h_pct=funding_8h_pct,
+        cross_agree=cross_agree,
+    )
     if direction == "none" or score < cfg.ENTRY_MIN_SCORE:
         return None
 
