@@ -107,7 +107,7 @@ def _today_pnl(equity: float) -> tuple[float, float]:
 def _build_status_text(equity: float) -> str:
     today_d, today_pct = _today_pnl(equity)
     lines = [
-        f"📊 v13 상태 ({_now_str()})",
+        f"📊 v15 상태 ({_now_str()})",
         f"잔고: ${equity:,.2f} (오늘 ${today_d:+.2f} / {today_pct*100:+.2f}%)",
     ]
     if _positions:
@@ -563,7 +563,7 @@ def _maybe_hourly_report(equity: float):
 def main():
     global _safety, _loop_count
 
-    print(f"[v13 boot] stage 1: env check", flush=True)
+    print(f"[v15 boot] stage 1: env check", flush=True)
     print(f"  BYBIT_API_KEY: {'set' if cfg.API_KEY else 'MISSING'}", flush=True)
     print(f"  TG_TOKEN: {'set' if cfg.TG_TOKEN else 'MISSING'}", flush=True)
     print(f"  SYMBOLS={cfg.SYMBOLS} TESTNET={cfg.TESTNET}", flush=True)
@@ -575,11 +575,11 @@ def main():
         sys.exit(1)
 
     print(f"╔════════════════════════════════════════╗", flush=True)
-    print(f"║  Bybit Bot v13 — Score-Based Sizing    ║", flush=True)
+    print(f"║  Bybit Bot v15 — 10-Component Signal   ║", flush=True)
     print(f"║  symbols={','.join(cfg.SYMBOLS)}", flush=True)
     print(f"╚════════════════════════════════════════╝", flush=True)
 
-    print(f"[v13 boot] stage 2: exchange init", flush=True)
+    print(f"[v15 boot] stage 2: exchange init", flush=True)
     try:
         ex.init()
     except Exception as e:
@@ -587,11 +587,11 @@ def main():
         traceback.print_exc()
         sys.exit(1)
 
-    print(f"[v13 boot] stage 3: state restore", flush=True)
+    print(f"[v15 boot] stage 3: state restore", flush=True)
     _safety = safety.load()
     _restore_from_state()
 
-    print(f"[v13 boot] stage 4: API smoke test", flush=True)
+    print(f"[v15 boot] stage 4: API smoke test", flush=True)
     eq0 = ex.get_balance()
     print(f"  balance=${eq0:.2f}", flush=True)
     for sym in cfg.SYMBOLS:
@@ -604,19 +604,22 @@ def main():
     n = len(cfg.SYMBOLS)
     sym_label = ", ".join(_short(s) for s in cfg.SYMBOLS)
     tg.send(
-        f"🚀 v13 시작 — 점수기반 사이징 ({n}종)\n"
+        f"🚀 v15 시작 — 10-component 신호 검증 ({n}종)\n"
         f"봇: {bot_label}\n"
         f"심볼: {sym_label} | 잔고: ${eq0:,.2f}\n"
         f"━ D 전략 (점수×tier 마진) ━\n"
+        f"  base: ADX + BB + Vol + MTF (0~100)\n"
+        f"  ×멀티: 4H ADX, 펀딩 sanity, 펀딩 추세\n"
+        f"          cross-asset, 변동성 regime, OI\n"
         f"  margin = tier × (score/100)^{cfg.SCORE_EXP:.1f}\n"
-        f"  55-59 → 3x  / TP +2% / 마진 ~16~28%\n"
-        f"  60-69 → 5x  / TP +3% / 마진 ~24~36%\n"
-        f"  70-79 → 10x / TP +6% / 마진 ~35~48%\n"
-        f"  80-89 → 15x / TP1+10% → 3.0×ATR / 마진 ~52~62%\n"
-        f"  90+   → 20x / 4.0×ATR / 마진 ~72~80%\n"
+        f"  55-59 → 3x  / TP +2%\n"
+        f"  60-69 → 5x  / TP +3%\n"
+        f"  70-79 → 10x / TP +6%\n"
+        f"  80-89 → 15x / TP1+10% → 3.0×ATR\n"
+        f"  90+   → 20x / 4.0×ATR\n"
         f"━ 글로벌 캡 ━\n"
         f"  활성 포지션 합계 마진 ≤ {cfg.MAX_TOTAL_MARGIN*100:.0f}%\n"
-        f"  캡 도달시 신규 신호 skip (텔레그램 알림)\n"
+        f"  진입 실패시 90분 cooldown\n"
         f"━ MR — 5x / BB 중간선 TP / 마진 50%\n"
         f"━ 안전 ━\n"
         f"자동 정지 OFF (수동 /halt)\n"
@@ -625,7 +628,7 @@ def main():
         f"⏰ KST 정각 리포트\n"
         f"🧠 AI: {'ON (' + cfg.AI_MODEL + ')' if (cfg.AI_ENABLED and cfg.GEMINI_API_KEY) else 'OFF'}"
     )
-    print(f"[v13 boot] startup complete — entering main loop", flush=True)
+    print(f"[v15 boot] startup complete — entering main loop", flush=True)
 
     while True:
         try:
@@ -739,10 +742,10 @@ def main():
             time.sleep(cfg.LOOP_SEC)
 
         except KeyboardInterrupt:
-            tg.send("🛑 v13 수동 종료")
+            tg.send("🛑 v15 수동 종료")
             sys.exit(0)
         except Exception as e:
             err = traceback.format_exc()
             print(f"[loop err] {e}\n{err}", flush=True)
-            tg.send(f"⚠️ v13 오류\n{str(e)[:300]}")
+            tg.send(f"⚠️ v15 오류\n{str(e)[:300]}")
             time.sleep(60)
