@@ -101,7 +101,7 @@ def get_overseas_balance() -> dict:
     available_usd = 0.0
     raw_balance: dict = {}
 
-    # 1) 종합 잔고 (총평가)
+    # 1) 종합 잔고 (총평가 + 통화별 잔고 검사)
     try:
         data = api.get(
             "/uapi/overseas-stock/v1/trading/inquire-present-balance",
@@ -117,15 +117,35 @@ def get_overseas_balance() -> dict:
         rt_cd = data.get("rt_cd")
         if rt_cd == "0":
             o3 = data.get("output3", {})
+            o2_list = data.get("output2", []) or []
             raw_balance = o3
             total_eval_usd = _safe_float(o3.get("tot_asst_amt"))
+            # output3 에서 외화 필드 시도
             available_usd = (
                 _safe_float(o3.get("ord_psbl_frcr_amt"))
                 or _safe_float(o3.get("frcr_dncl_amt1"))
                 or _safe_float(o3.get("frcr_dncl_amt"))
             )
+            # v3.7: output2 (통화별 list) 에서 USD 항목 찾기 — 환전 후 보통 여기에 있음
+            if available_usd == 0 and o2_list:
+                for entry in o2_list:
+                    if not isinstance(entry, dict):
+                        continue
+                    crcy = (entry.get("crcy_cd") or "").upper()
+                    if crcy == "USD":
+                        # USD 통화 항목 — 가용 외화 후보 필드들
+                        candidate = (
+                            _safe_float(entry.get("frcr_dncl_amt1"))
+                            or _safe_float(entry.get("frcr_dncl_amt"))
+                            or _safe_float(entry.get("ord_psbl_frcr_amt"))
+                            or _safe_float(entry.get("frcr_evlu_amt"))
+                            or _safe_float(entry.get("frcr_buy_amt_smtl"))
+                        )
+                        if candidate > 0:
+                            available_usd = candidate
+                            print(f"[OS_TRADER] output2 USD 항목 발견: ${candidate:.2f}")
+                            break
         else:
-            # v3.6: 진단 로그 — 잔고 조회 실패시 응답 코드/메시지/계좌 정보
             msg1 = data.get("msg1", "")
             msg_cd = data.get("msg_cd", "")
             print(f"[OS_TRADER] 잔고 실패 rt_cd={rt_cd} msg_cd={msg_cd} "

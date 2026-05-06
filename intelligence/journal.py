@@ -353,6 +353,61 @@ def latest_proposals(*, bot_id: Optional[str] = None,
         return []
 
 
+def symbol_weight(*, bot_id: str, symbol: str,
+                  days: int = 30, min_trades: int = 3) -> float:
+    """심볼별 자동 사이즈 가중치 (Tier 2 자동 학습).
+
+    최근 N일 거래 데이터로 심볼별 승률 + PnL 보고 사이즈 multiplier 계산.
+
+    Returns:
+        weight: 0.3 ~ 1.5 (1.0 = 중립)
+        - 잘 되는 심볼: > 1.0 (사이즈 boost)
+        - 부진 심볼: < 1.0 (사이즈 축소)
+        - 데이터 부족: 1.0
+    """
+    stats = trade_stats(bot_id=bot_id, since_seconds=days * 86400)
+    if stats.get("n", 0) < min_trades:
+        return 1.0
+    by_sym = stats.get("by_symbol", {})
+    s = by_sym.get(symbol)
+    if not s or s["n"] < min_trades:
+        return 1.0
+
+    n = s["n"]
+    win_rate = s["wins"] / n
+    pnl = s["pnl"]
+    pnl_per = pnl / n
+
+    # 승률 기반 weight: 50% = 1.0, 30% = 0.7, 70% = 1.2
+    wr_mult = 0.5 + win_rate
+
+    # PnL 부스트/페널티
+    if pnl_per >= 5.0:
+        pnl_mult = 1.10
+    elif pnl_per >= 1.0:
+        pnl_mult = 1.05
+    elif pnl_per <= -5.0:
+        pnl_mult = 0.75
+    elif pnl_per <= -1.0:
+        pnl_mult = 0.90
+    else:
+        pnl_mult = 1.0
+
+    weight = wr_mult * pnl_mult
+    return max(0.3, min(1.5, weight))
+
+
+def all_symbol_weights(*, bot_id: str, days: int = 30,
+                       min_trades: int = 3) -> dict[str, float]:
+    """모든 심볼의 weight 한 번에 계산. /weights 명령용."""
+    stats = trade_stats(bot_id=bot_id, since_seconds=days * 86400)
+    out: dict[str, float] = {}
+    for sym in stats.get("by_symbol", {}).keys():
+        out[sym] = symbol_weight(bot_id=bot_id, symbol=sym,
+                                 days=days, min_trades=min_trades)
+    return out
+
+
 def update_proposal_status(proposal_id: int, status: str) -> bool:
     try:
         conn = _conn()
