@@ -225,8 +225,30 @@ def buy_overseas(ticker: str, name: str, exchange: str,
     if current_price == 0:
         return None
 
-    qty = calc_overseas_qty(current_price, budget_override=full_allocation_usd,
+    # v4.0 Phase 3: 심볼별 자동 가중치 — budget 에 적용
+    sw = 1.0
+    if _journal is not None and full_allocation_usd is None:
+        try:
+            sw = _journal.symbol_weight(
+                bot_id=_bot_id_for_strategy(), symbol=ticker, days=30,
+            )
+            if not (0.3 <= sw <= 1.5):
+                sw = 1.0
+        except Exception:
+            sw = 1.0
+
+    # full_allocation_usd 없을 때만 weight 적용 (budget_override 모드는 그대로)
+    adjusted_full_allocation = full_allocation_usd
+    if full_allocation_usd is None and sw != 1.0:
+        # calc 에 budget_override 로 OS_POSITION_USD × sw 전달
+        from config import OS_POSITION_USD as _ospu
+        adjusted_full_allocation = _ospu * sw
+
+    qty = calc_overseas_qty(current_price,
+                            budget_override=adjusted_full_allocation,
                             atr_pct=atr_pct)
+    if abs(sw - 1.0) > 0.05:
+        print(f"[OS_TRADER] {ticker} 심볼 가중치 {sw:.2f}x 적용")
     if qty == 0:
         budget = full_allocation_usd or OS_POSITION_USD
         bal = get_overseas_balance()

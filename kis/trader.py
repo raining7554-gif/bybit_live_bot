@@ -91,15 +91,24 @@ def buy_market(ticker: str, name: str, reason: str = "스윙 진입",
     try:
         from config import RISK_PARITY_ENABLED, TARGET_DAILY_RISK_PCT, MIN_POSITION_PCT
         if RISK_PARITY_ENABLED and atr_pct and atr_pct > 0.005:
-            # target_position_pct = target_risk / atr_pct
-            # 예: target=0.5%, atr=2% → 25% 포지션
-            #     target=0.5%, atr=5% → 10% 포지션
             vol_adj_pct = TARGET_DAILY_RISK_PCT / atr_pct
-            # 균등 배분 상한 (기본) 과 vol_adj 최소값 적용
             position_pct = min(position_pct, vol_adj_pct)
             position_pct = max(MIN_POSITION_PCT, position_pct)
     except ImportError:
         pass
+
+    # v4.0 Phase 3: 심볼별 자동 가중치 (지난 30일 성과 기반)
+    if _journal is not None:
+        try:
+            sw = _journal.symbol_weight(
+                bot_id=_bot_id_for_strategy(), symbol=ticker, days=30,
+            )
+            if sw and 0.3 <= sw <= 1.5:
+                position_pct *= sw
+                if abs(sw - 1.0) > 0.05:
+                    print(f"[TRADER] {ticker} 심볼 가중치 {sw:.2f}x 적용")
+        except Exception as e:
+            print(f"[TRADER] symbol_weight err: {e}")
 
     target = min(int(total * position_pct), available)
     qty = target // current_price

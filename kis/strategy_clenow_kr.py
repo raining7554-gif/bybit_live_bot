@@ -542,7 +542,12 @@ def scan_clenow_candidates(
     리턴: [{"ticker", "name", "score", "close", "ma50"}, ...] max_positions 개
     """
     if universe is None:
-        universe = KR_UNIVERSE_TOP350
+        # v4.0 Phase 4: 유니버스 사이즈 제한 (작전주/저유동성 종목 회피)
+        try:
+            from config import DOM_UNIVERSE_LIMIT
+            universe = KR_UNIVERSE_TOP350[:DOM_UNIVERSE_LIMIT]
+        except ImportError:
+            universe = KR_UNIVERSE_TOP350
     if excluded_tickers is None:
         excluded_tickers = []
 

@@ -166,6 +166,16 @@ RISK_PARITY_ENABLED = True       # False면 기존 균등 배분 유지
 TARGET_DAILY_RISK_PCT = 0.005    # 종목당 일일 0.5% 변동 리스크 목표
 MIN_POSITION_PCT = 0.05          # 최소 포지션 비율 (5% 이하면 진입 안함)
 
+# v4.0 Phase 4: 유니버스 정제 — 시총 상위 N 종목만 사용
+# 350 종목 전체 = 작전주/저유동성 종목 포함. 200 으로 줄이면 더 안전.
+DOM_UNIVERSE_LIMIT = int(os.environ.get("DOM_UNIVERSE_LIMIT", "200"))
+
+# v4.0 Phase 4: 세금 효율 — 미장 단기 매매 페널티 (양도세 절감 유도)
+# 7일 미만 보유 + 작은 수익 (10% 미만) 시 매도 보류 (장기보유 유도).
+# 단, 손절 (-5%) 또는 큰 수익 (+10%+) 은 제한 없음.
+# False = 페널티 없음 (기본). True = 활성화.
+US_HOLD_PERIOD_PENALTY = os.environ.get("US_HOLD_PERIOD_PENALTY", "false").lower() == "true"
+
 # v4.0 Phase 2B: 단계별 부분 익절 — 추세 잡으면서 수익 잠금
 # 각 레벨에 도달시 N% 청산. 나머지 25% 는 트레일/MA50 종료까지.
 # (수익률, 청산비율) 리스트 — 낮은 수익률부터 정렬되어야 함.
