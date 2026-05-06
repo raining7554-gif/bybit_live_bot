@@ -68,11 +68,14 @@ def compute_indicators(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
 def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
                    df_4h: pd.DataFrame,
                    funding_8h_pct: float | None = None,
-                   cross_agree: float | None = None) -> Optional[dict]:
-    """v14 entry. 8-component score (4 base + 4 multipliers).
+                   funding_24h_ago: float | None = None,
+                   cross_agree: float | None = None,
+                   oi_change_4h: float | None = None,
+                   price_change_4h: float | None = None) -> Optional[dict]:
+    """v15 entry. 10-component score (4 base + 6 multipliers).
 
-    funding_8h_pct: 현재 펀딩 레이트 (소수점 비율). None = 페널티 없음.
-    cross_agree: 다른 심볼들과 4H 추세 일치도 (0~1). None = 페널티 없음.
+    multipliers: HTF ADX, funding sanity, funding trend, cross-asset,
+                 volatility regime, OI confirmation.
     """
     if len(df_15m) < 60 or len(df_1h) < 60 or len(df_4h) < 60:
         return None
@@ -84,7 +87,10 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
     score, direction = _signal_strength(
         row, row_h1, row_h4,
         funding_8h_pct=funding_8h_pct,
+        funding_24h_ago=funding_24h_ago,
         cross_agree=cross_agree,
+        oi_change_4h=oi_change_4h,
+        price_change_4h=price_change_4h,
     )
     if direction == "none" or score < cfg.ENTRY_MIN_SCORE:
         return None

@@ -61,16 +61,21 @@ def _trail_mult(tier: str) -> float:
 
 def _signal_strength(row, row_h1, row_h4, *,
                      funding_8h_pct: float | None = None,
-                     cross_agree: float | None = None) -> tuple[float, str]:
+                     funding_24h_ago: float | None = None,
+                     cross_agree: float | None = None,
+                     oi_change_4h: float | None = None,
+                     price_change_4h: float | None = None) -> tuple[float, str]:
     """Returns (score 0..100, direction).
 
-    v14 — 8-component score:
+    v15 — 10-component score:
       기본 점수 (0~100):  ADX(30) + BB(25) + Vol(25) + MTF(20) — 기존 4가지
       필터 multiplier (0.5~1.0 각각, 기하평균 적용):
         - 4H ADX confirmation
         - Funding rate sanity (signal vs crowded position)
-        - Cross-asset confluence (다른 심볼들과 추세 일치)
+        - Funding trend (24h 변화 — 막바지/시작 구분)  [v15 신규]
+        - Cross-asset confluence
         - Volatility regime (4H atr_pct_pctile)
+        - OI confirmation (가격 + OI 일치 여부)         [v15 신규]
 
     멀티플라이어 누락시 1.0 (no penalty) — backtest 호환성 유지.
     """
@@ -168,8 +173,61 @@ def _signal_strength(row, row_h1, row_h4, *,
         else:
             vol_mult = 0.70  # 너무 낮거나 너무 높은 변동성
 
-    # 기하평균 — 한 멀티가 매우 낮아도 다른 멀티가 보정. 강한 종합 페널티 효과.
-    combined_mult = (htf_mult * fund_mult * cross_mult * vol_mult) ** 0.25
+    # ── v15 신규 ──
+
+    # 5) Funding trend (24h 변화)
+    if funding_8h_pct is None or funding_24h_ago is None:
+        fund_trend_mult = 1.0
+    else:
+        delta = funding_8h_pct - funding_24h_ago
+        # 펀딩 막바지 (이미 한쪽으로 극단 + 같은 방향 더 가속)
+        if direction == "long":
+            if funding_8h_pct > 0.0003 and delta > 0.0002:
+                fund_trend_mult = 0.70  # late stage bull
+            elif funding_8h_pct < -0.0003 and delta > 0.0001:
+                fund_trend_mult = 1.0  # short squeeze 시작 (롱 좋음)
+            else:
+                fund_trend_mult = 0.90
+        elif direction == "short":
+            if funding_8h_pct < -0.0003 and delta < -0.0002:
+                fund_trend_mult = 0.70
+            elif funding_8h_pct > 0.0003 and delta < -0.0001:
+                fund_trend_mult = 1.0
+            else:
+                fund_trend_mult = 0.90
+        else:
+            fund_trend_mult = 1.0
+
+    # 6) OI confirmation
+    # 가격 동의방향 + OI 증가 = 진짜 추세
+    # 가격 동의방향 + OI 감소 = squeeze (forced) → 페널티
+    if oi_change_4h is None or price_change_4h is None:
+        oi_mult = 1.0
+    else:
+        if direction == "long":
+            if price_change_4h > 0 and oi_change_4h > 0.02:
+                oi_mult = 1.0  # confirmed bull
+            elif price_change_4h > 0 and oi_change_4h < -0.02:
+                oi_mult = 0.65  # squeeze fake pump
+            elif price_change_4h <= 0 and oi_change_4h > 0.02:
+                oi_mult = 0.75  # 가격 떨어지는데 OI 증가 → 신규 숏 (롱엔 안좋음)
+            else:
+                oi_mult = 0.90
+        elif direction == "short":
+            if price_change_4h < 0 and oi_change_4h > 0.02:
+                oi_mult = 1.0  # confirmed bear
+            elif price_change_4h < 0 and oi_change_4h < -0.02:
+                oi_mult = 0.65  # long capitulation only
+            elif price_change_4h >= 0 and oi_change_4h > 0.02:
+                oi_mult = 0.75  # 가격 오르는데 OI 증가 → 신규 롱 (숏엔 안좋음)
+            else:
+                oi_mult = 0.90
+        else:
+            oi_mult = 1.0
+
+    # 기하평균 — 6개 멀티 (1/6승). 하나가 매우 낮아도 다른 게 보정.
+    combined_mult = (htf_mult * fund_mult * fund_trend_mult *
+                     cross_mult * vol_mult * oi_mult) ** (1.0 / 6.0)
 
     score = base_score * combined_mult
     return score, direction
