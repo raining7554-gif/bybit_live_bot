@@ -663,15 +663,30 @@ def main():
             except Exception as e:
                 telegram.send(f"⚠️ /diagnose {bid} 오류: {e}")
 
+    def cmd_news():
+        """v5.0: KR 시장 뉴스 sentiment 즉시 분석."""
+        try:
+            import news as _news_mod
+            telegram.send("📰 KR 뉴스 분석 중...")
+            s = _news_mod.get_kr_market_sentiment()
+            if s:
+                telegram.send(_news_mod.format_market_sentiment_msg(s), dedup_sec=10)
+            else:
+                telegram.send("⚠️ 뉴스 분석 실패 (RSS 또는 Gemini 문제)")
+        except Exception as e:
+            telegram.send(f"⚠️ /news 오류: {type(e).__name__}: {e}")
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
         "/propose": cmd_propose,
         "/symbols": cmd_symbols,
         "/diagnose": cmd_diagnose,
+        "/news":    cmd_news,
     }
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
+    last_news_report_kst_date = ""  # v5.0: 09:00 KST 시장 뉴스 (일 1회)
 
     while True:
         now = now_kst()
@@ -915,6 +930,20 @@ def main():
                 and (is_dom_market_hours() or is_os_market_hours())):
             send_summary(dom_pos, os_pos, trade_count)
             last_summary_kst_hour = now.hour
+
+        # ════ v5.0: 09:00 KST KR 시장 뉴스 sentiment (일 1회) ═════════════════
+        today_str = now.strftime("%Y-%m-%d")
+        if (now.hour == 9 and now.minute < 10
+                and today_str != last_news_report_kst_date
+                and is_trading_day(now)):
+            try:
+                import news as _news_mod
+                s = _news_mod.get_kr_market_sentiment()
+                if s:
+                    telegram.send_force(_news_mod.format_market_sentiment_msg(s))
+                    last_news_report_kst_date = today_str
+            except Exception as e:
+                print(f"[MAIN] 뉴스 sentiment err: {e}")
 
         # ════ 일일 결산 (15:35) ════════════════════════
         if t_hm == DOM_CLOSING_MSG and not sent_closing and is_trading_day(now):
