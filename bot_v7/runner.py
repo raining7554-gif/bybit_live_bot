@@ -694,13 +694,31 @@ def main():
                         last_loss = _last_loss_ts.get(symbol, 0.0)
                         if time.time() - last_loss > cfg.COOLDOWN_BARS_LOSS * 15 * 60:
                             snap = ai.market_snapshot(df15, df1h, df4h)
-                            # v14: 펀딩 + cross-asset 데이터 추가
-                            funding = ex.get_funding_rate(symbol)
+                            # v14/v15: 8-component 신호 검증 데이터 수집
                             cross_agree = _compute_cross_agree(symbol, symbol_trends)
+                            funding_hist = ex.get_funding_history(symbol, count=4)
+                            funding_now = funding_hist[0] if funding_hist else None
+                            funding_24h = funding_hist[3] if (funding_hist and len(funding_hist) >= 4) else None
+                            oi_info = ex.get_open_interest_trend(symbol)
+                            oi_change_4h = oi_info["change_pct"] if oi_info else None
+                            # 같은 기간(약 4h) 가격 변화 — 4H 봉 1개로 근사
+                            try:
+                                if len(df4h) >= 2:
+                                    p_now = float(df4h.iloc[-1].close)
+                                    p_past = float(df4h.iloc[-2].close)
+                                    price_change_4h = (p_now - p_past) / p_past if p_past > 0 else None
+                                else:
+                                    price_change_4h = None
+                            except Exception:
+                                price_change_4h = None
+
                             sig = strat.evaluate_entry(
                                 df15, df1h, df4h,
-                                funding_8h_pct=funding,
+                                funding_8h_pct=funding_now,
+                                funding_24h_ago=funding_24h,
                                 cross_agree=cross_agree,
+                                oi_change_4h=oi_change_4h,
+                                price_change_4h=price_change_4h,
                             )
                             if sig:
                                 _try_open(symbol, equity, sig, snap)

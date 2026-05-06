@@ -193,12 +193,17 @@ _CACHE_TTL = {"15": cfg.CACHE_15M_SEC, "60": cfg.CACHE_1H_SEC,
 # v14: 펀딩 레이트 캐시 (8시간 funding interval, 30분 캐시)
 _funding_cache: dict[str, tuple[float, float]] = {}
 _FUNDING_CACHE_TTL = 1800  # 30분
+# v15: 펀딩 히스토리 (추세 계산용) + OI 캐시
+_funding_hist_cache: dict[str, tuple[list, float]] = {}
+_FUNDING_HIST_TTL = 1800  # 30분
+_oi_cache: dict[str, tuple[list, float]] = {}
+_OI_CACHE_TTL = 600  # 10분 (OI 는 변동 잦음)
 
 
 def get_funding_rate(symbol: str) -> Optional[float]:
     """현재 8시간 펀딩 레이트 (소수점 비율, 예: 0.0001 = 0.01%/8h).
 
-    None 반환 = 조회 실패. 신호 점수 계산시 None 이면 페널티 없음 (보수적).
+    None 반환 = 조회 실패. 신호 점수 계산시 None 이면 페널티 없음.
     """
     now = time.time()
     if symbol in _funding_cache:
@@ -216,6 +221,72 @@ def get_funding_rate(symbol: str) -> Optional[float]:
             return rate
     except Exception as e:
         print(f"[funding {symbol}] err: {e}", flush=True)
+    return None
+
+
+def get_funding_history(symbol: str, count: int = 4) -> Optional[list[float]]:
+    """최근 N개 펀딩 레이트 (가장 최근이 [0]). 8시간 간격 × N = N×8h 시계열.
+
+    추세 계산용: [현재, 8h전, 16h전, 24h전].
+    None = 조회 실패.
+    """
+    now = time.time()
+    if symbol in _funding_hist_cache:
+        hist, ts = _funding_hist_cache[symbol]
+        if now - ts < _FUNDING_HIST_TTL and len(hist) >= count:
+            return hist[:count]
+    try:
+        r = session().get_funding_rate_history(
+            category="linear", symbol=symbol, limit=count,
+        )
+        rows = r.get("result", {}).get("list", [])
+        if rows:
+            hist = [float(row.get("fundingRate", 0)) for row in rows]
+            _funding_hist_cache[symbol] = (hist, now)
+            return hist
+    except Exception as e:
+        print(f"[funding_hist {symbol}] err: {e}", flush=True)
+    return None
+
+
+def get_open_interest_trend(symbol: str, interval: str = "1h",
+                            count: int = 5) -> Optional[dict]:
+    """OI 시계열 + 변화율. count=5, interval=1h 면 5시간 OI 추적.
+
+    Returns:
+        {"current": float, "past": float, "change_pct": float, "values": [...]}
+        change_pct: (current - past) / past — 양수 = 증가, 음수 = 감소
+        None = 조회 실패
+    """
+    now = time.time()
+    if symbol in _oi_cache:
+        info, ts = _oi_cache[symbol]
+        if now - ts < _OI_CACHE_TTL:
+            return info
+    try:
+        r = session().get_open_interest(
+            category="linear", symbol=symbol,
+            intervalTime=interval, limit=count,
+        )
+        rows = r.get("result", {}).get("list", [])
+        if len(rows) < 2:
+            return None
+        values = [float(row.get("openInterest", 0)) for row in rows]
+        current = values[0]
+        past = values[-1]  # count-1 시간 전
+        if past <= 0:
+            return None
+        change_pct = (current - past) / past
+        info = {
+            "current": current,
+            "past": past,
+            "change_pct": change_pct,
+            "values": values,
+        }
+        _oi_cache[symbol] = (info, now)
+        return info
+    except Exception as e:
+        print(f"[oi {symbol}] err: {e}", flush=True)
     return None
 
 
