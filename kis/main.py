@@ -473,10 +473,28 @@ def main():
             msg1 = data.get("msg1", "")[:120]
             if rt_cd == "0":
                 o3 = data.get("output3", {})
+                o2_list = data.get("output2", []) or []
                 lines.append(f"✅ 해외종합 ({tr_id})")
                 lines.append(f"  총자산: ${_sf(o3.get('tot_asst_amt')):.2f}")
                 lines.append(f"  외화예치1: ${_sf(o3.get('frcr_dncl_amt1')):.2f}")
                 lines.append(f"  외화예치2: ${_sf(o3.get('frcr_dncl_amt')):.2f}")
+                # v3.7: output2 통화별 목록 표시
+                if o2_list:
+                    lines.append(f"  output2 ({len(o2_list)} 통화):")
+                    for entry in o2_list[:5]:
+                        if not isinstance(entry, dict):
+                            continue
+                        crcy = entry.get("crcy_cd", "?")
+                        amts = []
+                        for k in ("frcr_dncl_amt1", "frcr_dncl_amt",
+                                  "ord_psbl_frcr_amt", "frcr_evlu_amt"):
+                            v = _sf(entry.get(k))
+                            if v > 0:
+                                amts.append(f"{k}={v:.2f}")
+                        line = f"    {crcy}: " + (", ".join(amts) if amts else "(0)")
+                        lines.append(line[:100])
+                else:
+                    lines.append(f"  output2: (없음)")
             else:
                 lines.append(f"❌ 해외종합 ({tr_id})")
                 lines.append(f"  rt_cd={rt_cd} msg: {msg1}")

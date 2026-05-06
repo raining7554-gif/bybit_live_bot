@@ -507,3 +507,164 @@ def propose_async(*, bot_id: str, current_params: dict,
         args=(bot_id, current_params, send_telegram, verbose_errors),
         daemon=True, name="ai-proposal",
     ).start()
+
+
+# ── 패턴 매칭 (Tier 1 자동 학습) ──────────────────────────────
+
+def _feature_distance(a: dict, b: dict) -> float:
+    """두 시장 스냅샷 간 거리 (작을수록 비슷). 정규화된 차이의 L2."""
+    if not a or not b:
+        return float("inf")
+    # 비교할 핵심 indicator (있는 것만)
+    keys = ["adx", "rsi", "bb_width", "vol_ratio"]
+    diffs = []
+    for tf in ("15m", "1h", "4h"):
+        sa = a.get(tf, {}) if isinstance(a.get(tf), dict) else {}
+        sb = b.get(tf, {}) if isinstance(b.get(tf), dict) else {}
+        for k in keys:
+            va = sa.get(k)
+            vb = sb.get(k)
+            if va is None or vb is None:
+                continue
+            try:
+                # k 별 정규화 (대략 0~1)
+                if k == "adx":
+                    d = (float(va) - float(vb)) / 50.0
+                elif k == "rsi":
+                    d = (float(va) - float(vb)) / 100.0
+                elif k == "bb_width":
+                    d = (float(va) - float(vb)) / 0.05
+                elif k == "vol_ratio":
+                    d = (float(va) - float(vb)) / 2.0
+                else:
+                    d = float(va) - float(vb)
+                diffs.append(d * d)
+            except (TypeError, ValueError):
+                continue
+    if not diffs:
+        return float("inf")
+    return sum(diffs) ** 0.5
+
+
+def find_similar_trades(*, bot_id: str, symbol: str,
+                        current_snapshot: dict,
+                        k: int = 5,
+                        days: int = 90) -> list[dict]:
+    """현재 시장 스냅샷과 비슷한 과거 거래 K건 반환 (가장 비슷한 순)."""
+    trades = journal.recent_trades(bot_id=bot_id,
+                                   since_seconds=days * 86400,
+                                   limit=300)
+    if not trades:
+        return []
+    # 같은 심볼 우선
+    same_sym = [t for t in trades if t.get("symbol") == symbol]
+    pool = same_sym if len(same_sym) >= k else trades
+
+    scored = []
+    for t in pool:
+        snap_str = t.get("market_snapshot")
+        if not snap_str:
+            continue
+        try:
+            snap = json.loads(snap_str)
+        except Exception:
+            continue
+        d = _feature_distance(current_snapshot, snap)
+        if d == float("inf"):
+            continue
+        scored.append((d, t))
+    scored.sort(key=lambda x: x[0])
+    return [t for _, t in scored[:k]]
+
+
+def _build_pattern_prompt(symbol: str, direction: str,
+                          current_snap: dict,
+                          similar_trades: list[dict]) -> str:
+    cur = json.dumps(current_snap, ensure_ascii=False)[:500]
+    lines = [
+        f"당신은 트레이딩 패턴 분석가입니다. 현재 셋업과 비슷한 과거 거래들을 비교해서",
+        f"이번 진입 추천 여부를 JSON 으로 답하세요.",
+        f"",
+        f"현재: {symbol} {direction} 진입 검토 중",
+        f"현재 시장: {cur}",
+        f"",
+        f"과거 비슷한 거래 {len(similar_trades)}건:",
+    ]
+    for i, t in enumerate(similar_trades, 1):
+        outcome = "이김" if t.get("pnl", 0) >= 0 else "짐"
+        lines.append(
+            f"  {i}. {t.get('symbol')} {t.get('side')} score={t.get('score', 0):.0f} "
+            f"→ {outcome} ({t.get('pnl', 0):+.2f}, {t.get('reason', '?')})"
+        )
+    lines.extend([
+        "",
+        "JSON 응답 형식 (다른 텍스트 금지):",
+        '{"recommend": "go" | "small" | "skip",',
+        ' "confidence": 0.0~1.0,',
+        ' "reason_kr": "1줄 근거 (40자 이내)"}',
+        "",
+        "기준:",
+        "- 과거 4건 이상 이김 → go",
+        "- 비슷한 결과 (3:2 or 2:3) → small",
+        "- 4건 이상 짐 → skip",
+    ])
+    return "\n".join(lines)
+
+
+def pattern_check(bot_id: str, symbol: str, direction: str,
+                  current_snapshot: dict) -> Optional[dict]:
+    """v15 Tier 1: 과거 비슷한 거래 비교 + AI 의견.
+
+    Returns:
+        {"recommend": "go"|"small"|"skip", "confidence": 0~1, "reason_kr": "..."}
+        또는 None (데이터 부족 / AI 비활성)
+
+    매 진입시 호출. 시간 비용 = AI 1회 호출 (~3초). 신호 평가 단계에 적합.
+    동기 호출 (진입 결정에 영향) — 백그라운드 X.
+    """
+    if not _enabled():
+        return None
+    similar = find_similar_trades(
+        bot_id=bot_id, symbol=symbol,
+        current_snapshot=current_snapshot, k=5,
+    )
+    if len(similar) < 3:
+        return None  # 데이터 부족 (3건 미만이면 의미 없음)
+
+    text, err = _call_gemini(
+        _build_pattern_prompt(symbol, direction, current_snapshot, similar),
+        want_json=True, timeout=15,
+    )
+    if not text:
+        return None
+    parsed = _extract_json(text)
+    if parsed is None:
+        return None
+    rec = parsed.get("recommend", "small")
+    if rec not in ("go", "small", "skip"):
+        rec = "small"
+    parsed["recommend"] = rec
+    parsed["similar_count"] = len(similar)
+    parsed["similar_wins"] = sum(1 for t in similar if t.get("pnl", 0) >= 0)
+    return parsed
+
+
+def pattern_to_multiplier(pattern_result: Optional[dict]) -> float:
+    """패턴 매칭 결과 → 점수 multiplier.
+
+    go = 1.0 (페널티 없음)
+    small = 0.85 (사이즈 약간 줄임)
+    skip = 0.55 (강한 페널티 — 점수 < 55 가 되어 진입 차단되도록)
+    None (데이터 부족) = 1.0
+    """
+    if pattern_result is None:
+        return 1.0
+    rec = pattern_result.get("recommend", "small")
+    conf = float(pattern_result.get("confidence", 0.5))
+    if rec == "go":
+        return 1.0
+    elif rec == "skip":
+        # 확신 높을수록 강한 페널티
+        return 0.55 - (conf - 0.5) * 0.20  # 0.45 ~ 0.55
+    else:  # small
+        return 0.85 - (conf - 0.5) * 0.10  # 0.80 ~ 0.85

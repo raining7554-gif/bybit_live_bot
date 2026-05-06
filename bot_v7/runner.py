@@ -215,13 +215,53 @@ def _try_open(symbol: str, equity: float, signal: dict,
     sizing_tier = "mr" if is_mr else signal.get("tier", "base")
     score = signal.get("score") or 0
 
+    # v15 Tier 1: 과거 비슷한 거래 패턴 매칭 (D 전략만)
+    if not is_mr and snapshot:
+        try:
+            from intelligence import agent as _ag
+            direction = "long" if side == "Buy" else "short"
+            pattern = _ag.pattern_check(
+                bot_id=ai.BOT_ID, symbol=symbol,
+                direction=direction, current_snapshot=snapshot,
+            )
+            if pattern:
+                pat_mult = _ag.pattern_to_multiplier(pattern)
+                score_after = score * pat_mult
+                rec = pattern.get("recommend", "?")
+                similar = pattern.get("similar_count", 0)
+                wins = pattern.get("similar_wins", 0)
+                reason = pattern.get("reason_kr", "")
+                tg.send(
+                    f"🧠 [{_short(symbol)}] 패턴매칭: {rec.upper()} "
+                    f"({wins}/{similar} 과거 승)\n"
+                    f"점수 {score:.0f} → {score_after:.0f}\n"
+                    f"근거: {reason}"
+                )
+                # 패턴 페널티 후 점수 < ENTRY_MIN_SCORE 면 진입 차단
+                if score_after < cfg.ENTRY_MIN_SCORE:
+                    tg.send(f"⏸️ [{_short(symbol)}] 패턴 거부 → 진입 skip")
+                    _last_loss_ts[symbol] = time.time()  # cooldown
+                    return
+                score = score_after  # 사이징에 사용될 점수 업데이트
+        except Exception as e:
+            print(f"[pattern {symbol}] err: {e}", flush=True)
+
     # v13: 다른 활성 포지션이 사용 중인 마진 합계 → 캡 계산용
     active_margin = sum(
         p.get("margin_pct", 0.0) for s, p in _positions.items() if s != symbol
     )
+
+    # v15 Tier 2: 심볼별 자동 가중치 (지난 30일 성과 기반)
+    try:
+        from intelligence import journal as _ij
+        sw = _ij.symbol_weight(bot_id=ai.BOT_ID, symbol=symbol, days=30)
+    except Exception:
+        sw = 1.0
+
     qty, margin_pct = strat.calc_qty(
         equity, lev, entry_price, symbol,
         tier=sizing_tier, score=score, active_margin_used=active_margin,
+        symbol_weight=sw,
     )
     if qty <= 0:
         # 캡 도달했거나 사이즈 너무 작아서 skip
@@ -265,8 +305,9 @@ def _try_open(symbol: str, equity: float, signal: dict,
     side_kr = "롱" if side == "Buy" else "숏"
     icon = "〰️ MR" if is_mr else "📈 D"
     notional = qty * entry_price
+    sw_str = f" (가중치 {sw:.2f}x)" if abs(sw - 1.0) > 0.05 else ""
     tg.send(
-        f"{icon} [{_short(symbol)}] {side_kr} 진입 ({lev:.0f}x) score={score:.0f}\n"
+        f"{icon} [{_short(symbol)}] {side_kr} 진입 ({lev:.0f}x) score={score:.0f}{sw_str}\n"
         f"마진 {margin_pct*100:.1f}% (notional ${notional:,.0f})\n"
         f"잔고: ${equity:,.2f}  진입가: ${entry_price:,.2f}"
     )
@@ -457,6 +498,34 @@ def _setup_handlers():
         tg.send(ai.get_symbol_stats_text(days=7))
         tg.send(ai.get_symbol_stats_text(days=30))
 
+    def weights_cmd():
+        """v15 Tier 2: 현재 적용 중인 심볼별 자동 가중치 표시."""
+        try:
+            from intelligence import journal as _ij
+            weights = _ij.all_symbol_weights(bot_id=ai.BOT_ID, days=30)
+        except Exception as e:
+            tg.send(f"⚠️ /weights 오류: {e}")
+            return
+        if not weights:
+            tg.send("📐 심볼 가중치 — 데이터 부족 (거래 3건 이상 누적 후 표시)")
+            return
+        lines = ["📐 <b>심볼 자동 가중치</b> (지난 30일 기반)"]
+        for sym in cfg.SYMBOLS:
+            w = weights.get(sym, 1.0)
+            if abs(w - 1.0) < 0.05:
+                tag = "중립"
+                icon = "⚪"
+            elif w > 1.0:
+                tag = f"부스트 +{(w-1)*100:.0f}%"
+                icon = "🟢"
+            else:
+                tag = f"축소 -{(1-w)*100:.0f}%"
+                icon = "🔴"
+            lines.append(f"{icon} {_short(sym)}: {w:.2f}x ({tag})")
+        lines.append("")
+        lines.append("거래 사이즈에 자동 곱해짐. 30일 승률+PnL 기반.")
+        tg.send("\n".join(lines))
+
     return {
         "/status":  status,
         "/score":   score_cmd,
@@ -465,6 +534,7 @@ def _setup_handlers():
         "/propose": propose_cmd,
         "/lessons": lessons_cmd,
         "/symbols": symbols_cmd,
+        "/weights": weights_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
@@ -624,7 +694,7 @@ def main():
         f"━ 안전 ━\n"
         f"자동 정지 OFF (수동 /halt)\n"
         f"서버사이드 -2% SL 부착\n"
-        f"명령: /status /score /ai /review /propose /lessons /symbols /halt /resume\n"
+        f"명령: /status /score /ai /review /propose /lessons /symbols /weights /halt /resume\n"
         f"⏰ KST 정각 리포트\n"
         f"🧠 AI: {'ON (' + cfg.AI_MODEL + ')' if (cfg.AI_ENABLED and cfg.GEMINI_API_KEY) else 'OFF'}"
     )
