@@ -1,8 +1,6 @@
-"""나스닥 스캐너 v3.1 — NASDAQ-100 핵심 종목 스윙 (universe 10 → 약 35)
+"""나스닥 스캐너 v4.1 — NASDAQ-100 + S&P 500 핵심 (universe 35 → 55)
 
-유니버스 35종목 (NASDAQ-100 시총 상위 + S&P 500 IT/반도체 핵심).
-소수점 매매 안 함 (1주 이상만 진입 가능). 시드 작으면 OS_POSITION_USD
-를 넘는 비싼 종목은 자동 제외 (가격 필터).
+유니버스 55종목. 가격 필터 자동 (OS_POSITION_USD 초과 종목 제외).
 """
 from config import OS_POSITION_USD
 from strategy_overseas import get_os_regime, check_os_entry, get_overseas_current
@@ -32,6 +30,8 @@ OS_UNIVERSE = [
     {"ticker": "KLAC",  "name": "KLA",             "exchange": "NAS"},
     {"ticker": "ASML",  "name": "ASML",            "exchange": "NAS"},
     {"ticker": "ARM",   "name": "ARM",             "exchange": "NAS"},
+    {"ticker": "MRVL",  "name": "마벨",            "exchange": "NAS"},
+    {"ticker": "ON",    "name": "온세미",          "exchange": "NAS"},
     # ── 클라우드 / SaaS / 보안 ─────────────────────────────
     {"ticker": "ORCL",  "name": "오라클",          "exchange": "NYS"},
     {"ticker": "CRM",   "name": "세일즈포스",      "exchange": "NYS"},
@@ -44,15 +44,32 @@ OS_UNIVERSE = [
     {"ticker": "DDOG",  "name": "데이터독",        "exchange": "NAS"},
     {"ticker": "ANET",  "name": "아리스타",        "exchange": "NYS"},
     {"ticker": "SNOW",  "name": "스노우플레이크",  "exchange": "NYS"},
+    {"ticker": "FTNT",  "name": "포티넷",          "exchange": "NAS"},
+    {"ticker": "MDB",   "name": "몽고DB",          "exchange": "NAS"},
+    {"ticker": "NET",   "name": "클라우드플레어",  "exchange": "NYS"},
+    {"ticker": "OKTA",  "name": "옥타",            "exchange": "NAS"},
     # ── 핀테크 / 신성장 / 기타 ─────────────────────────────
     {"ticker": "PLTR",  "name": "팔란티어",        "exchange": "NAS"},
     {"ticker": "COIN",  "name": "코인베이스",      "exchange": "NAS"},
     {"ticker": "SHOP",  "name": "쇼피파이",        "exchange": "NAS"},
     {"ticker": "UBER",  "name": "우버",            "exchange": "NYS"},
     {"ticker": "ABNB",  "name": "에어비앤비",      "exchange": "NAS"},
-    # ── 인덱스 ETF (방어/벤치) ────────────────────────────
+    {"ticker": "PYPL",  "name": "페이팔",          "exchange": "NAS"},
+    {"ticker": "SQ",    "name": "블록(스퀘어)",    "exchange": "NYS"},
+    {"ticker": "ROKU",  "name": "로쿠",            "exchange": "NAS"},
+    # ── 헬스케어 (액션 큰 종목) ────────────────────────────
+    {"ticker": "VRTX",  "name": "버텍스",          "exchange": "NAS"},
+    {"ticker": "REGN",  "name": "리제너론",        "exchange": "NAS"},
+    {"ticker": "ISRG",  "name": "인튜이티브서지컬", "exchange": "NAS"},
+    {"ticker": "MRNA",  "name": "모더나",          "exchange": "NAS"},
+    # ── 소비재 / 산업 (모멘텀 좋은 것만) ──────────────────
+    {"ticker": "SBUX",  "name": "스타벅스",        "exchange": "NAS"},
+    {"ticker": "NKE",   "name": "나이키",          "exchange": "NYS"},
+    {"ticker": "DIS",   "name": "디즈니",          "exchange": "NYS"},
+    # ── 인덱스 / 테마 ETF ────────────────────────────────
     {"ticker": "QQQ",   "name": "나스닥100 ETF",   "exchange": "NAS"},
     {"ticker": "SPY",   "name": "S&P500 ETF",      "exchange": "AMS"},
+    {"ticker": "ARKK",  "name": "ARK이노베이션",   "exchange": "AMS"},
 ]
 
 

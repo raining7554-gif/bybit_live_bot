@@ -255,8 +255,7 @@ def buy_overseas(ticker: str, name: str, exchange: str,
         msg = (f"⚠️ 해외 매수 스킵: {name}({ticker})\n"
                f"현재가 ${current_price:.2f} > 슬리브 예산 ${budget:.2f}\n"
                f"(가용 ${bal.get('available_usd', 0):.2f})")
-        print(f"[OS_TRADER] {msg}")
-        telegram.send(msg, dedup_sec=3600)
+        print(f"[OS_TRADER] {msg}")  # v4.1: 텔레그램 미전송, 로그만
         return None
 
     body = {

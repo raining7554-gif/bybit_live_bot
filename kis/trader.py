@@ -117,8 +117,7 @@ def buy_market(ticker: str, name: str, reason: str = "스윙 진입",
         msg = (f"⚠️ 매수 스킵: {name}({ticker})\n"
                f"현재가 ₩{current_price:,} > 종목당 예산 ₩{target:,}\n"
                f"(총평가 ₩{total:,} / 가용 ₩{available:,} / 비중 {position_pct*100:.0f}%)")
-        print(f"[TRADER] {msg}")
-        telegram.send(msg, dedup_sec=3600)
+        print(f"[TRADER] {msg}")  # v4.1: 텔레그램 미전송, 로그만
         return None
 
     body = {

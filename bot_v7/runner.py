@@ -785,6 +785,12 @@ def main():
                             except Exception:
                                 price_change_4h = None
 
+                            # v4.1: 뉴스 sentiment (CryptoPanic 기반)
+                            try:
+                                from . import news as _news
+                                news_sent = _news.get_news_sentiment(symbol)
+                            except Exception:
+                                news_sent = None
                             sig = strat.evaluate_entry(
                                 df15, df1h, df4h,
                                 funding_8h_pct=funding_now,
@@ -792,6 +798,7 @@ def main():
                                 cross_agree=cross_agree,
                                 oi_change_4h=oi_change_4h,
                                 price_change_4h=price_change_4h,
+                                news_sentiment=news_sent,
                             )
                             if sig:
                                 _try_open(symbol, equity, sig, snap)
