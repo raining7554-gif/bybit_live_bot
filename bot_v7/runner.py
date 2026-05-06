@@ -48,6 +48,28 @@ def _short(symbol: str) -> str:
     return symbol.replace("USDT", "").replace("USD", "") or symbol
 
 
+def _compute_cross_agree(self_symbol: str,
+                        symbol_trends: dict[str, str]) -> float | None:
+    """v14: 다른 심볼들의 4H 추세가 본 심볼의 추세와 얼마나 일치하는지 (0~1).
+
+    1.0 = 다른 심볼 모두 같은 방향 (강한 시장 컨플루언스)
+    0.5 = 절반만 일치 (또는 중립)
+    0.0 = 모두 반대 방향 (이상 신호 가능성)
+    """
+    self_trend = symbol_trends.get(self_symbol)
+    if self_trend in (None, "flat"):
+        return None  # 본 심볼 추세 불명확 → 페널티 없음
+    others = [t for sym, t in symbol_trends.items()
+              if sym != self_symbol and t]
+    if not others:
+        return None  # 비교 대상 없음
+    same = sum(1 for t in others if t == self_trend)
+    flat = sum(1 for t in others if t == "flat")
+    # flat 은 중립 (0.5점), same 은 1점, opposite 은 0점
+    score = (same + 0.5 * flat) / len(others)
+    return score
+
+
 # ── 통계 (전 심볼 합산 / 단일 trade log) ──────────────────────
 def _compute_stats(window_sec: int) -> tuple[int, int, float]:
     cutoff = time.time() - window_sec
@@ -628,12 +650,11 @@ def main():
                 time.sleep(cfg.LOOP_SEC)
                 continue
 
-            # 심볼별 처리
+            # v14: 심볼별 4H 추세 사전 계산 (cross-asset confluence 용)
+            symbol_trends: dict[str, str] = {}  # symbol → 'up' / 'down' / 'flat'
+            symbol_dfs: dict[str, tuple] = {}    # symbol → (df15, df1h, df4h)
             for symbol in cfg.SYMBOLS:
                 try:
-                    api_pos = ex.get_open_positions(symbol)
-                    _reconcile_with_exchange(symbol, api_pos)
-
                     df15_raw = ex.get_ohlcv_cached(symbol, "15", 200)
                     df1h_raw = ex.get_ohlcv_cached(symbol, "60", 200)
                     df4h_raw = ex.get_ohlcv_cached(symbol, "240", 200)
@@ -641,6 +662,31 @@ def main():
                         continue
                     df15, df1h, df4h = strat.compute_indicators(
                         df15_raw, df1h_raw, df4h_raw)
+                    symbol_dfs[symbol] = (df15, df1h, df4h)
+                    # 4H 추세 분류
+                    r4 = df4h.iloc[-1]
+                    ema50 = float(getattr(r4, "ema50", 0))
+                    close = float(getattr(r4, "close", 0))
+                    if ema50 > 0:
+                        diff = (close - ema50) / ema50
+                        if diff > 0.005:
+                            symbol_trends[symbol] = "up"
+                        elif diff < -0.005:
+                            symbol_trends[symbol] = "down"
+                        else:
+                            symbol_trends[symbol] = "flat"
+                except Exception as e:
+                    print(f"[trend {symbol} err] {e}", flush=True)
+
+            # 심볼별 처리
+            for symbol in cfg.SYMBOLS:
+                try:
+                    api_pos = ex.get_open_positions(symbol)
+                    _reconcile_with_exchange(symbol, api_pos)
+
+                    if symbol not in symbol_dfs:
+                        continue
+                    df15, df1h, df4h = symbol_dfs[symbol]
 
                     if symbol in _positions:
                         _manage(symbol, df15)
@@ -648,7 +694,14 @@ def main():
                         last_loss = _last_loss_ts.get(symbol, 0.0)
                         if time.time() - last_loss > cfg.COOLDOWN_BARS_LOSS * 15 * 60:
                             snap = ai.market_snapshot(df15, df1h, df4h)
-                            sig = strat.evaluate_entry(df15, df1h, df4h)
+                            # v14: 펀딩 + cross-asset 데이터 추가
+                            funding = ex.get_funding_rate(symbol)
+                            cross_agree = _compute_cross_agree(symbol, symbol_trends)
+                            sig = strat.evaluate_entry(
+                                df15, df1h, df4h,
+                                funding_8h_pct=funding,
+                                cross_agree=cross_agree,
+                            )
                             if sig:
                                 _try_open(symbol, equity, sig, snap)
                             else:

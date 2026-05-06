@@ -59,39 +59,42 @@ def _trail_mult(tier: str) -> float:
     return ATR_TRAIL_MULT
 
 
-def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
-    """Returns (score 0..100, direction 'long'|'short'|'none').
+def _signal_strength(row, row_h1, row_h4, *,
+                     funding_8h_pct: float | None = None,
+                     cross_agree: float | None = None) -> tuple[float, str]:
+    """Returns (score 0..100, direction).
 
-    v8 changes vs v7-r1:
-      - 4H bias even shorter: close vs EMA50 (was EMA200)
-      - MTF non-binary: 20 / 15 / 0 (was 20/12/0 — neutral gets more credit)
-      - RSI directional check moved out of _signal_strength entirely
+    v14 — 8-component score:
+      기본 점수 (0~100):  ADX(30) + BB(25) + Vol(25) + MTF(20) — 기존 4가지
+      필터 multiplier (0.5~1.0 각각, 기하평균 적용):
+        - 4H ADX confirmation
+        - Funding rate sanity (signal vs crowded position)
+        - Cross-asset confluence (다른 심볼들과 추세 일치)
+        - Volatility regime (4H atr_pct_pctile)
+
+    멀티플라이어 누락시 1.0 (no penalty) — backtest 호환성 유지.
     """
     if row_h4 is None or pd.isna(row_h4.get("ema50", np.nan)):
         return 0.0, "none"
     if row_h1 is None or pd.isna(row_h1.get("ema50", np.nan)):
         return 0.0, "none"
 
-    # 4H trend direction — v8: close vs EMA50 (shorter trend, more entries)
     long_bias = row_h4.close > row_h4.ema50
     short_bias = row_h4.close < row_h4.ema50
     if not (long_bias or short_bias):
         return 0.0, "none"
     direction = "long" if long_bias else "short"
 
-    # ADX component (0..30) — v5: 18→0, 36→30
+    # ── 기본 4-component 점수 (0~100) — 기존 로직 유지 ──
     adx = row.adx if not pd.isna(row.adx) else 18
     adx_pt = max(0, min(30, (adx - 18) / 18 * 30))
 
-    # BB width component (0..25) — v5: 0.006→0, 0.020→25
     bbw = row.bb_width if not pd.isna(row.bb_width) else 0.01
     bbw_pt = max(0, min(25, (bbw - 0.006) / 0.014 * 25))
 
-    # Volume component (0..25) — v5: 0.9→0, 1.4→25
     vr = row.vol_ratio if not pd.isna(row.vol_ratio) else 1.0
     vol_pt = max(0, min(25, (vr - 0.9) / 0.5 * 25))
 
-    # MTF agreement (0..20) — v8: 20 / 15 / 0 (neutral gets more credit than v7-r1's 12)
     if not pd.isna(row_h1.get("ema50", np.nan)) and row_h1.ema50 > 0:
         h1_dist = (row_h1.close - row_h1.ema50) / row_h1.ema50
     else:
@@ -106,7 +109,69 @@ def _signal_strength(row, row_h1, row_h4) -> tuple[float, str]:
     else:
         mtf_pt = 0
 
-    score = adx_pt + bbw_pt + vol_pt + mtf_pt
+    base_score = adx_pt + bbw_pt + vol_pt + mtf_pt  # 0~100
+
+    # ── v14 신규: 4가지 필터 multiplier (0.5~1.0) ──
+
+    # 1) 4H ADX confirmation
+    htf_adx_val = row_h4.get("adx") if hasattr(row_h4, "get") else getattr(row_h4, "adx", None)
+    if htf_adx_val is None or (hasattr(pd, "isna") and pd.isna(htf_adx_val)):
+        htf_mult = 1.0
+    else:
+        htf_adx_val = float(htf_adx_val)
+        if htf_adx_val >= 25:
+            htf_mult = 1.0
+        elif htf_adx_val >= 18:
+            htf_mult = 0.85 + (htf_adx_val - 18) / 7 * 0.15
+        else:
+            htf_mult = 0.70
+
+    # 2) Funding sanity (None → no penalty)
+    if funding_8h_pct is None:
+        fund_mult = 1.0
+    else:
+        # 신호 방향과 펀딩 방향이 같고 절댓값 큼 = 과밀거래 → 강한 페널티
+        if direction == "long" and funding_8h_pct > 0.0005:
+            fund_mult = 0.50
+        elif direction == "short" and funding_8h_pct < -0.0005:
+            fund_mult = 0.50
+        elif direction == "long" and funding_8h_pct > 0.0003:
+            fund_mult = 0.75
+        elif direction == "short" and funding_8h_pct < -0.0003:
+            fund_mult = 0.75
+        else:
+            fund_mult = 1.0  # 정상 또는 반대 방향 (양호)
+
+    # 3) Cross-asset confluence (None → no penalty)
+    # cross_agree: 0~1. 1=다른 심볼 4H 추세 모두 같은 방향, 0=다 반대
+    if cross_agree is None:
+        cross_mult = 1.0
+    else:
+        cross_agree = max(0.0, min(1.0, cross_agree))
+        if cross_agree >= 0.6:
+            cross_mult = 1.0
+        elif cross_agree >= 0.3:
+            cross_mult = 0.85
+        else:
+            cross_mult = 0.70
+
+    # 4) Volatility regime (4H atr_pct_pctile)
+    vrp = row_h4.get("atr_pct_pctile") if hasattr(row_h4, "get") else getattr(row_h4, "atr_pct_pctile", None)
+    if vrp is None or (hasattr(pd, "isna") and pd.isna(vrp)):
+        vol_mult = 1.0
+    else:
+        vrp = float(vrp)
+        if 0.30 <= vrp <= 0.70:
+            vol_mult = 1.0
+        elif 0.20 <= vrp <= 0.80:
+            vol_mult = 0.85
+        else:
+            vol_mult = 0.70  # 너무 낮거나 너무 높은 변동성
+
+    # 기하평균 — 한 멀티가 매우 낮아도 다른 멀티가 보정. 강한 종합 페널티 효과.
+    combined_mult = (htf_mult * fund_mult * cross_mult * vol_mult) ** 0.25
+
+    score = base_score * combined_mult
     return score, direction
 
 
