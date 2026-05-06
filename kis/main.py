@@ -501,7 +501,7 @@ def main():
         except Exception as e:
             lines.append(f"❌ 해외종합 EXC: {type(e).__name__}: {str(e)[:100]}")
 
-        # 3) 해외 매수가능 (JTTT3007R)
+        # 3) 해외 매수가능 (JTTT3007R) — 더미 종목 코드로 호출
         try:
             tr_id = "VTTT3007R" if IS_PAPER else "JTTT3007R"
             data = api.get(
@@ -509,22 +509,52 @@ def main():
                 tr_id,
                 {
                     "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
-                    "OVRS_EXCG_CD": "NASD", "OVRS_ORD_UNPR": "0",
-                    "ITEM_CD": "",
+                    "OVRS_EXCG_CD": "NASD", "OVRS_ORD_UNPR": "100",
+                    "ITEM_CD": "AAPL",  # v3.8: 더미 종목 (KIS가 종목코드 요구)
                 },
             )
             rt_cd = data.get("rt_cd", "?")
             msg1 = data.get("msg1", "")[:120]
             if rt_cd == "0":
                 o = data.get("output", {})
-                lines.append(f"✅ 매수가능 ({tr_id})")
+                lines.append(f"✅ 매수가능 ({tr_id}) [AAPL 기준]")
                 lines.append(f"  ord_psbl_frcr: ${_sf(o.get('ord_psbl_frcr_amt')):.2f}")
                 lines.append(f"  ovrs_ord_psbl: ${_sf(o.get('ovrs_ord_psbl_amt')):.2f}")
+                # 모든 필드 dump
+                for k, v in o.items():
+                    if k in ("ord_psbl_frcr_amt", "ovrs_ord_psbl_amt"):
+                        continue
+                    if v and v not in ("", "0", "0.00", 0):
+                        lines.append(f"  {k}: {v}")
             else:
                 lines.append(f"❌ 매수가능 ({tr_id})")
                 lines.append(f"  rt_cd={rt_cd} msg: {msg1}")
         except Exception as e:
             lines.append(f"❌ 매수가능 EXC: {type(e).__name__}: {str(e)[:100]}")
+
+        # v3.8: output2 USD 항목 모든 필드 dump (진단용)
+        try:
+            tr_id = "VTRP6504R" if IS_PAPER else "CTRP6504R"
+            data = api.get(
+                "/uapi/overseas-stock/v1/trading/inquire-present-balance",
+                tr_id,
+                {
+                    "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
+                    "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840",
+                    "TR_MKET_CD": "00", "INQR_DVSN_CD": "00",
+                },
+            )
+            if data.get("rt_cd") == "0":
+                o2_list = data.get("output2", []) or []
+                for entry in o2_list:
+                    if isinstance(entry, dict) and (entry.get("crcy_cd") or "").upper() == "USD":
+                        lines.append("─────────")
+                        lines.append("<b>USD 항목 모든 필드 (진단)</b>")
+                        for k, v in entry.items():
+                            lines.append(f"  {k}: {v}")
+                        break
+        except Exception:
+            pass
 
         telegram.send("\n".join(lines), dedup_sec=10)
 
