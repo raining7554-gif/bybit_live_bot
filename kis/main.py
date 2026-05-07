@@ -28,6 +28,8 @@ from config import (
     OS_LEVERAGED_SIGNAL_MA, OS_LEVERAGED_AUX_MA,
     OS_LEVERAGED_ALLOCATIONS,
     CLENOW_MAX_POSITIONS, CLENOW_EXIT_MA,
+    CLENOW_WINDOW, CLENOW_TOP_PCT,
+    ROTATION_ALERT_ONLY, ROTATION_SCORE_GAP_MIN, ROTATION_MIN_HOLD_DAYS,
     DOM_SMALL_SEED_MODE, DOM_SMALL_SEED_MAX_PRICE, DOM_SMALL_SEED_POSITIONS,
     OS_SMALL_SEED_MODE, OS_SMALL_SEED_TICKER, OS_SMALL_SEED_BENCHMARK,
     OS_SMALL_SEED_ALLOCATIONS,
@@ -706,6 +708,7 @@ def main():
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
     last_news_report_kst_date = ""  # v5.0: 09:00 KST 시장 뉴스 (일 1회)
+    last_rotation_check_kst_date = ""  # v6.3: 09:10 KST 일일 회전 (일 1회)
 
     while True:
         now = now_kst()
@@ -963,6 +966,73 @@ def main():
                     last_news_report_kst_date = today_str
             except Exception as e:
                 print(f"[MAIN] 뉴스 sentiment err: {e}")
+
+        # ════ v6.3: 09:10 KST 일일 회전 시그널 체크 (Clenow 보유 vs 신규) ═════
+        # 첫 1개월 알림만 (실교체 X) — 데이터 누적 후 자동 교체 ON 결정
+        if (now.hour == 9 and 10 <= now.minute < 20
+                and today_str != last_rotation_check_kst_date
+                and is_trading_day(now)
+                and DOM_STRATEGY_MODE == "clenow"
+                and dom_pos):
+            try:
+                import strategy_clenow_kr as _clenow
+                signals = _clenow.check_rotation_signal(
+                    dom_pos,
+                    score_gap_min=ROTATION_SCORE_GAP_MIN,
+                    min_hold_days=ROTATION_MIN_HOLD_DAYS,
+                    n=CLENOW_WINDOW,
+                    top_pct=CLENOW_TOP_PCT,
+                    max_positions=CLENOW_MAX_POSITIONS,
+                )
+                if signals:
+                    msg = _clenow.format_rotation_msg(
+                        signals, alert_only=ROTATION_ALERT_ONLY)
+                    telegram.send_force(msg)
+                    # 알림만 모드: DB 에 시그널 기록 (사후 백테스트용)
+                    if _journal is not None:
+                        try:
+                            for s in signals:
+                                _journal.log_analysis(
+                                    bot_id=f"kis_kr_clenow",
+                                    kind="rotation_signal",
+                                    summary=(
+                                        f"sell {s['sell']['ticker']}({s['sell']['score']:.0f}) "
+                                        f"→ buy {s['buy']['ticker']}({s['buy']['score']:.0f}) "
+                                        f"gap={s['score_gap']:.0f}"
+                                    ),
+                                    details=str(s),
+                                )
+                        except Exception as je:
+                            print(f"[MAIN] rotation log err: {je}")
+                    # 실교체 모드 (1개월 후 활성화 가능)
+                    if not ROTATION_ALERT_ONLY:
+                        for s in signals:
+                            sell_t = s["sell"]["ticker"]
+                            buy_info = s["buy"]
+                            sold_pos = dom_pos.get(sell_t)
+                            if not sold_pos:
+                                continue
+                            if trader.sell_market(
+                                sell_t, sold_pos["name"], sold_pos["qty"],
+                                sold_pos["buy_price"],
+                                f"회전 — 점수 {s['sell']['score']:.0f} → "
+                                f"{buy_info['ticker']} {buy_info['score']:.0f} (+{s['score_gap']:.0f})"
+                            ):
+                                dom_pos.pop(sell_t, None)
+                                # 신규 매수
+                                bought = trader.buy_market(
+                                    buy_info["ticker"], buy_info["name"],
+                                    reason=f"회전 진입 (점수 {buy_info['score']:.0f})",
+                                    expected_price=int(buy_info.get("close", 0)) or None,
+                                    atr_pct=buy_info.get("atr_pct"),
+                                )
+                                if bought:
+                                    bought["strategy_type"] = "CLENOW"
+                                    dom_pos[buy_info["ticker"]] = bought
+                                    trade_count += 2  # sell + buy
+                last_rotation_check_kst_date = today_str
+            except Exception as e:
+                print(f"[MAIN] rotation 체크 err: {type(e).__name__}: {e}")
 
         # ════ 일일 결산 (15:35) ════════════════════════
         if t_hm == DOM_CLOSING_MSG and not sent_closing and is_trading_day(now):

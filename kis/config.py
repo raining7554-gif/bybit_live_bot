@@ -94,6 +94,13 @@ CLENOW_TOP_PCT        = 0.10         # 상위 10%만 진입
 CLENOW_EXIT_MA        = 50           # MA50 이탈 시 청산
 CLENOW_MAX_POSITIONS  = 8            # 최대 8종목 분산
 
+# v6.3: 일일 회전 (보유 vs 신규 후보 점수 비교)
+# 첫 1개월은 ROTATION_ALERT_ONLY=true (알림만, 실교체 X)
+# 데이터 누적 후 false 로 전환 → 자동 교체 활성화
+ROTATION_ALERT_ONLY      = os.environ.get("ROTATION_ALERT_ONLY", "true").lower() == "true"
+ROTATION_SCORE_GAP_MIN   = float(os.environ.get("ROTATION_SCORE_GAP_MIN", "20"))
+ROTATION_MIN_HOLD_DAYS   = int(os.environ.get("ROTATION_MIN_HOLD_DAYS", "3"))
+
 # ── 소액 시드 모드 (튜닝 가능) ──────────────────────
 # 시드 작을 때: 8포지션 × 12.5% 배분이 의미 없음 (1주도 못 사는 종목 다수)
 # 시드 규모별 권장:
