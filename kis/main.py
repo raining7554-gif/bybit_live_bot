@@ -119,12 +119,29 @@ def get_balance_info() -> dict:
         rt_cd = data.get("rt_cd")
         if rt_cd == "0":
             o = data.get("output2", [{}])[0]
+            total_eval = int(float(o.get("tot_evlu_amt", 0) or 0))
+            eval_profit = int(float(o.get("evlu_pfls_smtl_amt", 0) or 0))
+            buy_amount = int(float(o.get("pchs_amt_smtl_amt", 0) or 0))
+            # v6.6: 가용금액 — KIS 가 여러 필드로 줘서 가장 큰 값 사용
+            # nxdy_excc_amt (익일정산), prvs_rcdl_excc_amt (가수도), dnca_tot_amt (예수금)
+            avail_candidates = [
+                int(float(o.get("nxdy_excc_amt", 0) or 0)),
+                int(float(o.get("prvs_rcdl_excc_amt", 0) or 0)),
+                int(float(o.get("dnca_tot_amt", 0) or 0)),
+            ]
+            available = max(avail_candidates)
+            # v6.6: 수익률 — KIS asst_icdc_erng_rt 가 0 으로 자주 옴 → 직접 계산
+            kis_rate = float(o.get("asst_icdc_erng_rt", 0) or 0)
+            if kis_rate == 0 and buy_amount > 0:
+                profit_rate = (eval_profit / buy_amount) * 100
+            else:
+                profit_rate = kis_rate
             return {
-                "total_eval": int(o.get("tot_evlu_amt", 0)),
-                "available": int(o.get("prvs_rcdl_excc_amt", 0)),
-                "buy_amount": int(o.get("pchs_amt_smtl_amt", 0)),
-                "eval_profit": int(o.get("evlu_pfls_smtl_amt", 0)),
-                "profit_rate": float(o.get("asst_icdc_erng_rt", 0)),
+                "total_eval": total_eval,
+                "available": available,
+                "buy_amount": buy_amount,
+                "eval_profit": eval_profit,
+                "profit_rate": profit_rate,
             }
         # v3.6: 잔고 0 진단용 — 응답 본체를 로그에 남김
         msg1 = data.get("msg1", "")
