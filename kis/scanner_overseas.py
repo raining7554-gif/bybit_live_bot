@@ -1,22 +1,24 @@
-"""나스닥 스캐너 v4.1 — NASDAQ-100 + S&P 500 핵심 (universe 35 → 55)
+"""나스닥 스캐너 v6.12 — NASDAQ-100 + S&P 500 핵심 + 미드캡 (universe 55 → 120)
 
-유니버스 55종목. 가격 필터 자동 (OS_POSITION_USD 초과 종목 제외).
+유니버스 ~120종. 가격 필터 자동 (OS_POSITION_USD 초과 종목 제외, 단 fractional 모드시 OFF).
 """
 from config import OS_POSITION_USD
 from strategy_overseas import get_os_regime, check_os_entry, get_overseas_current
 
-# v3.1 universe: NASDAQ-100 + 미국 반도체/AI/클라우드 핵심.
-# 가격이 OS_POSITION_USD 초과면 런타임에 자동 스킵되므로 시드 규모 무관하게 등록.
+# v6.12: 유니버스 대폭 확장. 사용자 요청 "종목 더 많이보자".
+# 시드 작아도 자동 필터 (가격 > 예산이면 스킵), 모멘텀 후보 풀 다양화.
 OS_UNIVERSE = [
     # ── 메가캡 (FAANG + AI 대장) ──────────────────────────
     {"ticker": "NVDA",  "name": "엔비디아",        "exchange": "NAS"},
     {"ticker": "MSFT",  "name": "마이크로소프트",  "exchange": "NAS"},
-    {"ticker": "GOOGL", "name": "알파벳",          "exchange": "NAS"},
+    {"ticker": "GOOGL", "name": "알파벳A",         "exchange": "NAS"},
+    {"ticker": "GOOG",  "name": "알파벳C",         "exchange": "NAS"},
     {"ticker": "META",  "name": "메타",            "exchange": "NAS"},
     {"ticker": "AAPL",  "name": "애플",            "exchange": "NAS"},
     {"ticker": "AMZN",  "name": "아마존",          "exchange": "NAS"},
     {"ticker": "TSLA",  "name": "테슬라",          "exchange": "NAS"},
     {"ticker": "NFLX",  "name": "넷플릭스",        "exchange": "NAS"},
+    {"ticker": "BRK.B", "name": "버크셔B",         "exchange": "NYS"},
     # ── 반도체 ────────────────────────────────────────────
     {"ticker": "AVGO",  "name": "브로드컴",        "exchange": "NAS"},
     {"ticker": "AMD",   "name": "AMD",             "exchange": "NAS"},
@@ -32,6 +34,11 @@ OS_UNIVERSE = [
     {"ticker": "ARM",   "name": "ARM",             "exchange": "NAS"},
     {"ticker": "MRVL",  "name": "마벨",            "exchange": "NAS"},
     {"ticker": "ON",    "name": "온세미",          "exchange": "NAS"},
+    {"ticker": "ADI",   "name": "아날로그디바이스", "exchange": "NAS"},
+    {"ticker": "MCHP",  "name": "마이크로칩",      "exchange": "NAS"},
+    {"ticker": "NXPI",  "name": "NXP반도체",       "exchange": "NAS"},
+    {"ticker": "SMCI",  "name": "수퍼마이크로",    "exchange": "NAS"},
+    {"ticker": "STM",   "name": "ST마이크로",      "exchange": "NYS"},
     # ── 클라우드 / SaaS / 보안 ─────────────────────────────
     {"ticker": "ORCL",  "name": "오라클",          "exchange": "NYS"},
     {"ticker": "CRM",   "name": "세일즈포스",      "exchange": "NYS"},
@@ -48,7 +55,12 @@ OS_UNIVERSE = [
     {"ticker": "MDB",   "name": "몽고DB",          "exchange": "NAS"},
     {"ticker": "NET",   "name": "클라우드플레어",  "exchange": "NYS"},
     {"ticker": "OKTA",  "name": "옥타",            "exchange": "NAS"},
-    # ── 핀테크 / 신성장 / 기타 ─────────────────────────────
+    {"ticker": "WDAY",  "name": "워크데이",        "exchange": "NAS"},
+    {"ticker": "TEAM",  "name": "아틀라시안",      "exchange": "NAS"},
+    {"ticker": "TTD",   "name": "더트레이드데스크", "exchange": "NAS"},
+    {"ticker": "GTLB",  "name": "깃랩",            "exchange": "NAS"},
+    {"ticker": "S",     "name": "센티넬원",        "exchange": "NYS"},
+    # ── 핀테크 / 신성장 ─────────────────────────────
     {"ticker": "PLTR",  "name": "팔란티어",        "exchange": "NAS"},
     {"ticker": "COIN",  "name": "코인베이스",      "exchange": "NAS"},
     {"ticker": "SHOP",  "name": "쇼피파이",        "exchange": "NAS"},
@@ -57,19 +69,86 @@ OS_UNIVERSE = [
     {"ticker": "PYPL",  "name": "페이팔",          "exchange": "NAS"},
     {"ticker": "SQ",    "name": "블록(스퀘어)",    "exchange": "NYS"},
     {"ticker": "ROKU",  "name": "로쿠",            "exchange": "NAS"},
-    # ── 헬스케어 (액션 큰 종목) ────────────────────────────
+    {"ticker": "HOOD",  "name": "로빈후드",        "exchange": "NAS"},
+    {"ticker": "AFRM",  "name": "어펌",            "exchange": "NAS"},
+    {"ticker": "SOFI",  "name": "소파이",          "exchange": "NAS"},
+    {"ticker": "RBLX",  "name": "로블록스",        "exchange": "NYS"},
+    # ── 금융 (대형 은행 / 카드) ─────────────────────
+    {"ticker": "JPM",   "name": "JP모간",          "exchange": "NYS"},
+    {"ticker": "BAC",   "name": "뱅크오브아메리카", "exchange": "NYS"},
+    {"ticker": "WFC",   "name": "웰스파고",        "exchange": "NYS"},
+    {"ticker": "GS",    "name": "골드만삭스",      "exchange": "NYS"},
+    {"ticker": "MS",    "name": "모간스탠리",      "exchange": "NYS"},
+    {"ticker": "V",     "name": "비자",            "exchange": "NYS"},
+    {"ticker": "MA",    "name": "마스터카드",      "exchange": "NYS"},
+    {"ticker": "AXP",   "name": "아메리칸익스프레스","exchange": "NYS"},
+    {"ticker": "SCHW",  "name": "찰스슈왑",        "exchange": "NYS"},
+    {"ticker": "BLK",   "name": "블랙록",          "exchange": "NYS"},
+    # ── 헬스케어 ─────────────────────────────
     {"ticker": "VRTX",  "name": "버텍스",          "exchange": "NAS"},
     {"ticker": "REGN",  "name": "리제너론",        "exchange": "NAS"},
     {"ticker": "ISRG",  "name": "인튜이티브서지컬", "exchange": "NAS"},
     {"ticker": "MRNA",  "name": "모더나",          "exchange": "NAS"},
-    # ── 소비재 / 산업 (모멘텀 좋은 것만) ──────────────────
+    {"ticker": "LLY",   "name": "일라이릴리",      "exchange": "NYS"},
+    {"ticker": "JNJ",   "name": "존슨앤존슨",      "exchange": "NYS"},
+    {"ticker": "UNH",   "name": "유나이티드헬스",  "exchange": "NYS"},
+    {"ticker": "PFE",   "name": "화이자",          "exchange": "NYS"},
+    {"ticker": "ABBV",  "name": "애브비",          "exchange": "NYS"},
+    {"ticker": "MRK",   "name": "머크",            "exchange": "NYS"},
+    {"ticker": "TMO",   "name": "써모피셔",        "exchange": "NYS"},
+    {"ticker": "DHR",   "name": "다나허",          "exchange": "NYS"},
+    {"ticker": "AMGN",  "name": "암젠",            "exchange": "NAS"},
+    {"ticker": "GILD",  "name": "길리어드",        "exchange": "NAS"},
+    # ── 소비재 / 산업 ───────────────────────
     {"ticker": "SBUX",  "name": "스타벅스",        "exchange": "NAS"},
     {"ticker": "NKE",   "name": "나이키",          "exchange": "NYS"},
     {"ticker": "DIS",   "name": "디즈니",          "exchange": "NYS"},
+    {"ticker": "WMT",   "name": "월마트",          "exchange": "NYS"},
+    {"ticker": "COST",  "name": "코스트코",        "exchange": "NAS"},
+    {"ticker": "MCD",   "name": "맥도날드",        "exchange": "NYS"},
+    {"ticker": "HD",    "name": "홈디포",          "exchange": "NYS"},
+    {"ticker": "LOW",   "name": "로우스",          "exchange": "NYS"},
+    {"ticker": "PG",    "name": "P&G",             "exchange": "NYS"},
+    {"ticker": "KO",    "name": "코카콜라",        "exchange": "NYS"},
+    {"ticker": "PEP",   "name": "펩시",            "exchange": "NAS"},
+    {"ticker": "TGT",   "name": "타깃",            "exchange": "NYS"},
+    {"ticker": "BKNG",  "name": "부킹홀딩스",      "exchange": "NAS"},
+    {"ticker": "MAR",   "name": "메리어트",        "exchange": "NAS"},
+    {"ticker": "F",     "name": "포드",            "exchange": "NYS"},
+    {"ticker": "GM",    "name": "GM",              "exchange": "NYS"},
+    {"ticker": "RIVN",  "name": "리비안",          "exchange": "NAS"},
+    {"ticker": "LCID",  "name": "루시드",          "exchange": "NAS"},
+    # ── 산업/방산/우주 ─────────────────────
+    {"ticker": "BA",    "name": "보잉",            "exchange": "NYS"},
+    {"ticker": "CAT",   "name": "캐터필러",        "exchange": "NYS"},
+    {"ticker": "GE",    "name": "GE",              "exchange": "NYS"},
+    {"ticker": "RTX",   "name": "레이시온",        "exchange": "NYS"},
+    {"ticker": "LMT",   "name": "록히드마틴",      "exchange": "NYS"},
+    {"ticker": "DE",    "name": "디어",            "exchange": "NYS"},
+    # ── 통신 / 미디어 ───────────────────────
+    {"ticker": "T",     "name": "AT&T",            "exchange": "NYS"},
+    {"ticker": "VZ",    "name": "버라이즌",        "exchange": "NYS"},
+    {"ticker": "TMUS",  "name": "T모바일",         "exchange": "NAS"},
+    {"ticker": "CMCSA", "name": "컴캐스트",        "exchange": "NAS"},
+    # ── 에너지 ───────────────────────────
+    {"ticker": "XOM",   "name": "엑손모빌",        "exchange": "NYS"},
+    {"ticker": "CVX",   "name": "셰브론",          "exchange": "NYS"},
+    {"ticker": "OXY",   "name": "옥시덴탈",        "exchange": "NYS"},
+    # ── China ADR (옵션) ────────────────────
+    {"ticker": "BABA",  "name": "알리바바",        "exchange": "NYS"},
+    {"ticker": "JD",    "name": "징둥",            "exchange": "NAS"},
+    {"ticker": "PDD",   "name": "핀둬둬",          "exchange": "NAS"},
+    {"ticker": "BIDU",  "name": "바이두",          "exchange": "NAS"},
+    {"ticker": "NIO",   "name": "니오",            "exchange": "NYS"},
     # ── 인덱스 / 테마 ETF ────────────────────────────────
     {"ticker": "QQQ",   "name": "나스닥100 ETF",   "exchange": "NAS"},
     {"ticker": "SPY",   "name": "S&P500 ETF",      "exchange": "AMS"},
     {"ticker": "ARKK",  "name": "ARK이노베이션",   "exchange": "AMS"},
+    {"ticker": "SOXX",  "name": "반도체 ETF",      "exchange": "NAS"},
+    {"ticker": "XLK",   "name": "기술주 ETF",      "exchange": "AMS"},
+    {"ticker": "XLF",   "name": "금융 ETF",        "exchange": "AMS"},
+    {"ticker": "XLE",   "name": "에너지 ETF",      "exchange": "AMS"},
+    {"ticker": "XLV",   "name": "헬스케어 ETF",    "exchange": "AMS"},
 ]
 
 
