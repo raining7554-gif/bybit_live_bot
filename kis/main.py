@@ -1053,7 +1053,7 @@ def main():
                         trade_count += 1
                     last_os_mon = now
 
-                # 진입 스캔 (22:45 ~ 23:15)
+                # 진입 스캔 (전 미장 시간)
                 if (is_os_scan_time() and not total_circuit_tripped
                         and len(os_pos) < OS_MAX_POSITIONS):
                     if elapsed(last_os_scan) >= SCAN_INTERVAL_SEC:
@@ -1064,6 +1064,15 @@ def main():
                         except Exception as e:
                             print(f"[MAIN] 해외 스캔 오류: {e}")
                             cands = []
+                        # v6.10: 스캔 디버그 — 후보 발견 알림 (텔레그램 dedup 30분)
+                        if cands:
+                            telegram.send(
+                                f"🌙 미장 스캔 ({hhmm()} KST) — 후보 {len(cands)}종\n"
+                                + ", ".join(f"{c['ticker']} ${c.get('price',0):.0f}"
+                                            for c in cands[:5]),
+                                dedup_sec=1800,
+                            )
+                        bought_count = 0
                         for c in cands:
                             if len(os_pos) >= OS_MAX_POSITIONS:
                                 break
@@ -1075,6 +1084,15 @@ def main():
                             if res:
                                 os_pos[c["ticker"]] = res
                                 trade_count += 1
+                                bought_count += 1
+                        # v6.10: 후보 있는데 매수 0건이면 사유 알림 (1시간 dedup)
+                        if cands and bought_count == 0:
+                            telegram.send(
+                                f"⚠️ 후보 {len(cands)}종 발견했지만 매수 0건\n"
+                                f"가능 원인: 시간외 (정규: 22:30~05:00 KST), "
+                                f"가용잔고 부족, 또는 KIS 거부",
+                                dedup_sec=3600,
+                            )
                         last_os_scan = now
 
                 # EOD (05:45 ~ 05:55)
