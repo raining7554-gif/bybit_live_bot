@@ -1057,19 +1057,37 @@ def main():
                 if (is_os_scan_time() and not total_circuit_tripped
                         and len(os_pos) < OS_MAX_POSITIONS):
                     if elapsed(last_os_scan) >= SCAN_INTERVAL_SEC:
+                        # v6.11: 스캔 시작 알림 (1시간 dedup)
+                        telegram.send(
+                            f"🔭 미장 스캔 시작 ({hhmm()} KST) — KIS 일봉 조회 중 (~1~3분)",
+                            dedup_sec=3600,
+                        )
                         try:
                             cands = scanner_overseas.scan_overseas_candidates(
                                 exclude_tickers=list(os_pos.keys())
                             )
                         except Exception as e:
                             print(f"[MAIN] 해외 스캔 오류: {e}")
+                            telegram.send(f"⚠️ 미장 스캔 오류: {type(e).__name__}: {str(e)[:100]}",
+                                          dedup_sec=600)
                             cands = []
-                        # v6.10: 스캔 디버그 — 후보 발견 알림 (텔레그램 dedup 30분)
+                        # v6.11: 결과 알림 — 0건도 표시 (스캔이 정상 실행됐는지 확인용)
+                        try:
+                            from strategy_overseas import get_os_regime as _gor
+                            _regime = _gor().get("regime", "?")
+                        except Exception:
+                            _regime = "?"
                         if cands:
                             telegram.send(
-                                f"🌙 미장 스캔 ({hhmm()} KST) — 후보 {len(cands)}종\n"
+                                f"🌙 미장 스캔 ({hhmm()} KST) — 후보 {len(cands)}종 [regime={_regime}]\n"
                                 + ", ".join(f"{c['ticker']} ${c.get('price',0):.0f}"
                                             for c in cands[:5]),
+                                dedup_sec=1800,
+                            )
+                        else:
+                            telegram.send(
+                                f"🌙 미장 스캔 ({hhmm()} KST) — 후보 0종 [regime={_regime}]\n"
+                                f"전 종목 진입조건 (정배열/RSI/거래량/패턴) 탈락",
                                 dedup_sec=1800,
                             )
                         bought_count = 0
