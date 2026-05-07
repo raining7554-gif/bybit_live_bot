@@ -94,10 +94,10 @@ CLENOW_TOP_PCT        = 0.10         # 상위 10%만 진입
 CLENOW_EXIT_MA        = 50           # MA50 이탈 시 청산
 CLENOW_MAX_POSITIONS  = 8            # 최대 8종목 분산
 
-# v6.3: 일일 회전 (보유 vs 신규 후보 점수 비교)
-# 첫 1개월은 ROTATION_ALERT_ONLY=true (알림만, 실교체 X)
-# 데이터 누적 후 false 로 전환 → 자동 교체 활성화
-ROTATION_ALERT_ONLY      = os.environ.get("ROTATION_ALERT_ONLY", "true").lower() == "true"
+# v6.3/6.4: 일일 회전 (보유 vs 신규 후보 점수 비교) — 자동 교체 활성화
+# v6.4: ALERT_ONLY default false (사용자 요청) — 즉시 sell+buy 실행
+# 보수적으로 가려면 env 에 ROTATION_ALERT_ONLY=true 설정
+ROTATION_ALERT_ONLY      = os.environ.get("ROTATION_ALERT_ONLY", "false").lower() == "true"
 ROTATION_SCORE_GAP_MIN   = float(os.environ.get("ROTATION_SCORE_GAP_MIN", "20"))
 ROTATION_MIN_HOLD_DAYS   = int(os.environ.get("ROTATION_MIN_HOLD_DAYS", "3"))
 

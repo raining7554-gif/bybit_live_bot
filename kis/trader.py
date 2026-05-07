@@ -73,8 +73,7 @@ def buy_market(ticker: str, name: str, reason: str = "스윙 진입",
         drift = (current_price - expected_price) / expected_price
         if drift > SLIPPAGE_GUARD_PCT:
             msg = f"슬리피지 {drift*100:+.2f}% — {name}({ticker}) 매수 스킵"
-            print(f"[TRADER] {msg}")
-            telegram.send_error(msg)
+            print(f"[TRADER] {msg}")  # v6.4: 텔레그램 알림 제거, 로그만
             return None
 
     balance = get_account_balance()
@@ -130,14 +129,22 @@ def buy_market(ticker: str, name: str, reason: str = "스윙 진입",
         amount = current_price * qty
         print(f"[TRADER] 매수: {name}({ticker}) {qty}주 @ {current_price:,}원")
         telegram.send_buy(ticker, name, current_price, qty, amount, reason)
+        from datetime import datetime
         return {
             "ticker": ticker, "name": name, "qty": qty,
             "buy_price": current_price, "strategy_type": "SWING",
+            "buy_date": datetime.now().isoformat(),  # v6.4: rotation min_hold 용
         }
     else:
-        msg = f"매수 실패 {name}({ticker}): {data.get('msg1', '')}"
+        kis_msg = data.get("msg1", "")
+        msg = f"매수 실패 {name}({ticker}): {kis_msg}"
         print(f"[TRADER] {msg}")
-        telegram.send_error(msg)
+        # v6.4: 예상 가능한 실패 (예수금 부족 / 주문가능금액 초과 / 거래정지)
+        # 는 텔레그램 알림 생략, 로그만. 실제 시스템 오류만 알림.
+        _expected = ("주문가능금액", "예수금", "거래정지", "단주", "한도",
+                     "정지", "거부", "체결가능")
+        if not any(k in kis_msg for k in _expected):
+            telegram.send_error(msg)
         return None
 
 

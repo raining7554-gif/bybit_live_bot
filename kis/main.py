@@ -139,6 +139,111 @@ def get_balance_info() -> dict:
 
 
 # ═══════════════════════════════════════════════════════
+# v6.4: 시작 시 기존 보유 종목 동기화
+# ═══════════════════════════════════════════════════════
+def load_kr_holdings() -> dict:
+    """KIS inquire-balance output1 → dom_pos dict.
+
+    이전엔 봇 재시작시 dom_pos = {} 빈 채로 시작 → 기존 보유 인식 못함.
+    이 함수가 broker 의 실제 보유를 봇 메모리에 동기화.
+    """
+    try:
+        parts = ACCOUNT_NO.split("-")
+        acc_no = parts[0]
+        acc_prod = parts[1] if len(parts) > 1 else "01"
+        tr_id = "VTTC8434R" if IS_PAPER else "TTTC8434R"
+        data = api.get(
+            "/uapi/domestic-stock/v1/trading/inquire-balance",
+            tr_id,
+            {
+                "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
+                "AFHR_FLPR_YN": "N", "OFL_YN": "N", "INQR_DVSN": "02",
+                "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00",
+                "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+            },
+        )
+        if data.get("rt_cd") != "0":
+            print(f"[SYNC_KR] 잔고 조회 실패: {data.get('msg1', '')}")
+            return {}
+        holdings = {}
+        for item in data.get("output1", []):
+            qty = int(item.get("hldg_qty", 0) or 0)
+            if qty <= 0:
+                continue
+            ticker = item.get("pdno", "").strip()
+            name = item.get("prdt_name", ticker).strip()
+            avg_price = int(float(item.get("pchs_avg_pric", 0) or 0))
+            if not ticker or avg_price <= 0:
+                continue
+            holdings[ticker] = {
+                "ticker": ticker, "name": name,
+                "qty": qty, "buy_price": avg_price,
+                "strategy_type": DOM_STRATEGY_MODE.upper(),
+                # buy_date 없음 — rotation min_hold_days 가 None 처리하도록
+            }
+        return holdings
+    except Exception as e:
+        print(f"[SYNC_KR] 예외: {e}")
+        return {}
+
+
+def load_us_holdings() -> dict:
+    """KIS overseas inquire-present-balance → os_pos dict."""
+    try:
+        parts = ACCOUNT_NO.split("-")
+        acc_no = parts[0]
+        acc_prod = parts[1] if len(parts) > 1 else "01"
+        tr_id = "VTRP6504R" if IS_PAPER else "CTRP6504R"
+        data = api.get(
+            "/uapi/overseas-stock/v1/trading/inquire-present-balance",
+            tr_id,
+            {
+                "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
+                "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840",
+                "TR_MKET_CD": "00", "INQR_DVSN_CD": "00",
+            },
+        )
+        if data.get("rt_cd") != "0":
+            print(f"[SYNC_US] 잔고 조회 실패: {data.get('msg1', '')}")
+            return {}
+        holdings = {}
+        for item in data.get("output1", []):
+            qty = float(item.get("ovrs_cblc_qty", 0) or 0)
+            if qty <= 0:
+                continue
+            ticker = item.get("pdno", "").strip()
+            name = item.get("prdt_name", ticker).strip() or ticker
+            avg_price = float(item.get("pchs_avg_pric", 0) or 0)
+            exchange = (item.get("ovrs_excg_cd", "") or "NAS").strip()
+            if not ticker or avg_price <= 0:
+                continue
+            # KIS 의 거래소 코드 → 우리 코드 매핑
+            exch_map = {"NASD": "NAS", "NYSE": "NYS", "AMEX": "AMS"}
+            exchange = exch_map.get(exchange, exchange)
+            holdings[ticker] = {
+                "ticker": ticker, "name": name, "exchange": exchange,
+                "qty": qty, "buy_price": avg_price,
+                "market": "overseas",
+            }
+        return holdings
+    except Exception as e:
+        print(f"[SYNC_US] 예외: {e}")
+        return {}
+
+
+def sync_holdings_at_startup() -> tuple[dict, dict]:
+    """봇 시작/재시작 시 broker 실제 보유 → dom_pos / os_pos 복원."""
+    dom = load_kr_holdings()
+    us = load_us_holdings()
+    if dom:
+        print(f"[SYNC] KR 보유 {len(dom)}종 복원: {', '.join(dom.keys())}")
+    if us:
+        print(f"[SYNC] US 보유 {len(us)}종 복원: {', '.join(us.keys())}")
+    return dom, us
+
+
+# ═══════════════════════════════════════════════════════
 # 현황 요약
 # ═══════════════════════════════════════════════════════
 def send_summary(dom_pos, os_pos, trade_count):
@@ -414,7 +519,19 @@ def main():
         + (f"\n\n{health_report}" if health_report else "")
     )
 
-    dom_pos, os_pos = {}, {}
+    dom_pos, os_pos = sync_holdings_at_startup()
+    if dom_pos or os_pos:
+        try:
+            lines = ["♻️ <b>기존 보유 동기화</b>"]
+            for t, p in dom_pos.items():
+                lines.append(f"   🇰🇷 {p['name']}({t}) {p['qty']}주 @ ₩{p['buy_price']:,}")
+            for t, p in os_pos.items():
+                qd = (f"{p['qty']:.4f}" if isinstance(p['qty'], float) and p['qty'] != int(p['qty'])
+                      else f"{int(p['qty'])}")
+                lines.append(f"   🇺🇸 {p['name']}({t}) {qd}주 @ ${p['buy_price']:.2f}")
+            telegram.send_force("\n".join(lines))
+        except Exception as e:
+            print(f"[SYNC] 텔레그램 알림 실패: {e}")
     last_dom_scan = last_os_scan = None
     last_dom_mon = last_os_mon = None
     # v4.0: 통합 서킷 브레이커 상태
@@ -688,12 +805,18 @@ def main():
             telegram.send(f"⚠️ /news 오류: {type(e).__name__}: {e}")
 
     def cmd_scan_us():
-        """v6.1: US 유니버스 진단 — 종목별 진입 탈락 사유."""
+        """v6.1/6.4: US 유니버스 진단. 빠른 모드 (30종 샘플) + 진행률 갱신."""
         try:
-            telegram.send("🔍 US 스캔 진단 중... (유니버스 55종 일봉 조회 ~30초)")
-            d = scanner_overseas.diagnose_overseas()
+            telegram.send("🔍 US 스캔 진단 중... (30종 샘플, ~1분)")
+            def _progress(i, total):
+                if i > 1:
+                    print(f"[SCAN_US] {i}/{total} 진행 중", flush=True)
+            d = scanner_overseas.diagnose_overseas(
+                sample_size=30, progress_callback=_progress)
             telegram.send(scanner_overseas.format_diagnose_msg(d), dedup_sec=10)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             telegram.send(f"⚠️ /scan_us 오류: {type(e).__name__}: {e}")
 
     cmd_handlers = {
