@@ -208,6 +208,11 @@ def calc_overseas_qty(price_usd: float, budget_override: float | None = None,
                 vol_adj = available * (TARGET_DAILY_RISK_PCT / atr_pct)
                 budget = min(budget, vol_adj)
                 budget = max(budget, available * MIN_POSITION_PCT)
+                # v6.8: 진입 조건 통과한 종목은 최소 1주 살 수 있게 floor 보장
+                # (그래야 RISK_PARITY 가 budget 을 주가 아래로 깎아 skip 되는 일 방지)
+                # 단 가용잔고와 max budget(OS_POSITION_USD) 한도는 유지
+                if price_usd <= available and price_usd <= OS_POSITION_USD:
+                    budget = max(budget, price_usd)
         except ImportError:
             pass
 
