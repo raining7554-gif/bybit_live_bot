@@ -323,9 +323,17 @@ def buy_overseas(ticker: str, name: str, exchange: str,
             "qty": qty, "buy_price": current_price, "market": "overseas",
         }
     else:
-        msg = f"해외 매수 실패 {name}({ticker}): {data.get('msg1', '')}"
+        kis_msg = data.get("msg1", "")
+        msg = f"해외 매수 실패 {name}({ticker}): {kis_msg}"
         print(f"[OS_TRADER] {msg}")
-        telegram.send_error(msg)
+        # v6.9: 예상 가능한 실패는 로그만 (텔레그램 스팸 방지)
+        # - 시간 외 (프리/애프터마켓) 주문 거부
+        # - 가용금액 부족
+        # - 거래정지 / 단주
+        _expected = ("주문가능시간", "체결가능시간", "주문가능", "예수금",
+                     "주문가능금액", "거래정지", "단주", "한도", "정지", "거부")
+        if not any(k in kis_msg for k in _expected):
+            telegram.send_error(msg)
         return None
 
 

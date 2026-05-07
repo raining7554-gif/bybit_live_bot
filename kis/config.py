@@ -48,8 +48,15 @@ OS_ASSUMED_SEED_USD = 350           # 약 50만원
 # 운영 시간 (KST 기준, 서머타임 고려 않고 넉넉히)
 # v3.3: 진입창 풀 확장 — 기본 22:30 (개장) ~ 05:30 (종료 직전).
 # is_os_scan_time() 가 자정 넘어가는 윈도우(START > END) 자동 감지.
-OS_SCAN_TIME_START  = os.environ.get("OS_SCAN_TIME_START", "22:30")
-OS_SCAN_TIME_END    = os.environ.get("OS_SCAN_TIME_END", "05:30")
+# v6.9: 나스닥 전체 시간 (확장시간 포함) 으로 확장
+#   - 정규 (regular): 22:30~05:00 KST (DST) / 23:30~06:00 (STD)
+#   - 프리마켓 (pre):  17:00~22:30 KST (DST) / 18:00~23:30 (STD)
+#   - 애프터 (after):  05:00~09:00 KST (DST) / 06:00~10:00 (STD)
+# 17:00~10:00 = 17 시간, DST/STD 전 구간 + 확장시간 모두 커버
+# 단 KIS 일반 주문 (TTTT1002U) 은 정규시간만 체결 → 프리/애프터 주문은
+# v6.4 예상오류 필터로 텔레그램 알림 없이 로그만 (재시도는 정규 시작시 성공)
+OS_SCAN_TIME_START  = os.environ.get("OS_SCAN_TIME_START", "17:00")
+OS_SCAN_TIME_END    = os.environ.get("OS_SCAN_TIME_END", "10:00")
 OS_EOD_CHECK        = os.environ.get("OS_EOD_CHECK", "05:45")  # 미장 종료 직전 일봉 청산 체크
 
 # 포지션
