@@ -105,7 +105,15 @@ def get_overseas_daily(ticker: str, exchange: str = "NAS", count: int = 220) -> 
 
     - HHDFS76240000 한 번에 ~100건 → BYMD로 끊어서 여러 번 호출
     - SPY 등 거래소 코드 애매한 경우 AMS → NYS → NAS 순으로 시도
+    - v6.5: 10분 메모리 캐시 — /scan_us 반복 호출 시 즉시 반환
     """
+    import time as _t
+    cache_key = (ticker.upper(), exchange.upper(), count)
+    now = _t.time()
+    cached = _DAILY_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _DAILY_CACHE_TTL:
+        return cached[1]
+
     candidates = [exchange]
     for fb in _OVERSEAS_FALLBACKS:
         if fb not in candidates:
@@ -113,14 +121,20 @@ def get_overseas_daily(ticker: str, exchange: str = "NAS", count: int = 220) -> 
 
     for exc in candidates:
         candles = _try_one_exchange(ticker, exc, count)
-        # 절반이라도 받으면 사용 (regime 판단에 충분한 경우 있음)
         if len(candles) >= max(count // 2, 50):
             if exc != exchange:
                 print(f"[LEV] {ticker}: {exchange} 실패 → {exc} 로 {len(candles)}건 확보")
+            _DAILY_CACHE[cache_key] = (now, candles)
             return candles
 
     print(f"[LEV] {ticker}: 모든 거래소({','.join(candidates)}) 실패")
+    _DAILY_CACHE[cache_key] = (now, [])  # 실패도 캐시 (빈번한 재시도 방지)
     return []
+
+
+# v6.5: 일봉 메모리 캐시 (10분 TTL — 일봉은 자주 안 바뀌니 안전)
+_DAILY_CACHE: dict = {}
+_DAILY_CACHE_TTL = 600.0
 
 
 def _sma(values: list[float], n: int) -> float:

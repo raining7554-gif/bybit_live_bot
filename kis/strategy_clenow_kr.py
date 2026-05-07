@@ -437,7 +437,16 @@ def get_kr_daily(ticker: str, count: int = 140, market_code: str = "J") -> list:
 
     KIS의 itemchartprice는 1회 호출당 최대 100건 반환.
     count > 100 인 경우 날짜 범위를 끊어서 여러 번 호출 (페이지네이션).
+
+    v6.5: 10분 메모리 캐시 — 회전 체크/스캔 반복시 즉시 반환.
     """
+    import time as _t
+    cache_key = (ticker, market_code, count)
+    now_ts = _t.time()
+    cached = _KR_DAILY_CACHE.get(cache_key)
+    if cached and (now_ts - cached[0]) < _KR_DAILY_CACHE_TTL:
+        return cached[1]
+
     end_dt = datetime.now()
     chunk_days = 150  # 캘린더일 150 ≈ 거래일 100
     max_iters = max(2, (count // 90) + 2)
@@ -474,7 +483,14 @@ def get_kr_daily(ticker: str, count: int = 140, market_code: str = "J") -> list:
             break
 
     all_candles.sort(key=lambda c: c["date"], reverse=True)
-    return all_candles[:count]
+    result = all_candles[:count]
+    _KR_DAILY_CACHE[cache_key] = (now_ts, result)
+    return result
+
+
+# v6.5: KR 일봉 메모리 캐시 (10분 TTL)
+_KR_DAILY_CACHE: dict = {}
+_KR_DAILY_CACHE_TTL = 600.0
 
 
 def _sma(values: list[float], n: int) -> float:
