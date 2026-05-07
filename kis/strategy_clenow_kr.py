@@ -651,3 +651,145 @@ def should_exit(ticker: str, exit_ma: int = 50) -> tuple[bool, str]:
     if closes[0] < ma:
         return True, f"MA{exit_ma} 이탈 ({closes[0]:.0f} < {ma:.0f})"
     return False, ""
+
+
+# ═══════════════════════════════════════════════════════
+# v6.3: Daily rotation (보유 vs 신규 후보 점수 비교 → 교체 시그널)
+# ═══════════════════════════════════════════════════════
+def score_holdings(positions: dict, n: int = 120) -> list[dict]:
+    """현재 보유 종목들의 Clenow 점수 재계산.
+
+    positions: {ticker: pos_dict, ...} (main 의 dom_pos 형태)
+    Returns: [{"ticker", "name", "score", "close", "buy_price"}, ...] (점수 내림차순)
+    """
+    out = []
+    for ticker, pos in positions.items():
+        if pos.get("strategy_type") != "CLENOW":
+            continue
+        try:
+            candles = get_kr_daily(ticker, count=n + 10)
+            if len(candles) < n:
+                continue
+            closes = [c["close"] for c in candles]
+            score = clenow_score(closes, n)
+            if math.isnan(score):
+                continue
+            out.append({
+                "ticker": ticker,
+                "name": pos.get("name", ticker),
+                "score": float(score),
+                "close": closes[0],
+                "buy_price": pos.get("buy_price", 0),
+                "buy_date": pos.get("buy_date"),
+            })
+        except Exception as e:
+            print(f"[ROTATE] 보유 점수 계산 실패 {ticker}: {e}")
+    out.sort(key=lambda x: -x["score"])
+    return out
+
+
+def check_rotation_signal(
+    positions: dict,
+    score_gap_min: float = 20.0,
+    min_hold_days: int = 3,
+    n: int = 120,
+    top_pct: float = 0.15,
+    max_positions: int = 8,
+) -> list[dict]:
+    """일일 회전 체크 — 가장 약한 보유 vs 가장 강한 신규 후보.
+
+    트리거 조건 (모두 충족):
+      1) 신규 후보 점수 - 보유 종목 점수 ≥ score_gap_min
+      2) 보유 종목 보유 일수 ≥ min_hold_days
+      3) 신규 후보가 상위 top_pct 안에 들어 있음
+
+    Returns: 교체 시그널 list. 빈 리스트면 swap 없음.
+        [{"sell": {ticker, name, score, hold_days},
+          "buy":  {ticker, name, score, atr_pct, close},
+          "score_gap": float}, ...]
+    """
+    if not positions:
+        return []
+
+    held = score_holdings(positions, n=n)
+    if not held:
+        return []
+
+    held_tickers = [h["ticker"] for h in held]
+    candidates = scan_clenow_candidates(
+        n=n, top_pct=top_pct, max_positions=max_positions,
+        excluded_tickers=held_tickers,
+    )
+    if not candidates:
+        return []
+
+    from datetime import datetime
+    today = datetime.now()
+    signals = []
+
+    # 가장 약한 보유 종목과 가장 강한 신규 후보 비교
+    # (둘 이상 swap 가능하지만 안전하게 한 번에 1개만)
+    weakest = held[-1]
+    strongest_new = candidates[0]
+
+    gap = strongest_new["score"] - weakest["score"]
+    if gap < score_gap_min:
+        return []
+
+    # 보유 일수 계산
+    bd = weakest.get("buy_date")
+    hold_days = 999
+    if bd:
+        try:
+            if isinstance(bd, str):
+                buy_dt = datetime.fromisoformat(bd) if "T" in bd or "-" in bd \
+                         else datetime.strptime(bd, "%Y%m%d")
+            else:
+                buy_dt = bd
+            hold_days = (today - buy_dt).days
+        except Exception:
+            hold_days = 999  # 파싱 실패시 통과시켜줌
+    if hold_days < min_hold_days:
+        print(f"[ROTATE] {weakest['ticker']} 보유 {hold_days}일 < {min_hold_days}일 — 보류")
+        return []
+
+    signals.append({
+        "sell": {
+            "ticker": weakest["ticker"],
+            "name": weakest["name"],
+            "score": weakest["score"],
+            "hold_days": hold_days,
+        },
+        "buy": {
+            "ticker": strongest_new["ticker"],
+            "name": strongest_new["name"],
+            "score": strongest_new["score"],
+            "atr_pct": strongest_new.get("atr_pct"),
+            "close": strongest_new["close"],
+        },
+        "score_gap": float(gap),
+    })
+    return signals
+
+
+def format_rotation_msg(signals: list[dict], alert_only: bool = True) -> str:
+    """회전 시그널 → 텔레그램 메시지."""
+    if not signals:
+        return ""
+    s = signals[0]
+    sell, buy = s["sell"], s["buy"]
+    mode = "🔔 알림 (실행 X)" if alert_only else "🔁 자동 교체"
+    lines = [
+        f"<b>📐 일일 회전 시그널</b> {mode}",
+        f"━━━━━━━━━━━━━━",
+        f"💔 약한 보유: {sell['name']}({sell['ticker']})",
+        f"   점수 {sell['score']:.0f}, 보유 {sell['hold_days']}일",
+        f"💪 강한 후보: {buy['name']}({buy['ticker']})",
+        f"   점수 {buy['score']:.0f}, ₩{buy['close']:,.0f}",
+        f"점수 차: +{s['score_gap']:.0f}",
+    ]
+    if alert_only:
+        lines.append("")
+        lines.append("⚠️ 첫 1개월 관측 — 실교체 X")
+        lines.append("교체 시 실수익 비교용 데이터 누적 중")
+    return "\n".join(lines)
