@@ -848,7 +848,7 @@ def main():
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
     last_news_report_kst_date = ""  # v5.0: 09:00 KST 시장 뉴스 (일 1회)
-    last_rotation_check_kst_date = ""  # v6.3: 09:10 KST 일일 회전 (일 1회)
+    last_rotation_check_kst_hour = -1  # v6.7: 매 시간 09:10 ~ 14:10 회전 체크
 
     while True:
         now = now_kst()
@@ -1107,10 +1107,11 @@ def main():
             except Exception as e:
                 print(f"[MAIN] 뉴스 sentiment err: {e}")
 
-        # ════ v6.3: 09:10 KST 일일 회전 시그널 체크 (Clenow 보유 vs 신규) ═════
-        # 첫 1개월 알림만 (실교체 X) — 데이터 누적 후 자동 교체 ON 결정
-        if (now.hour == 9 and 10 <= now.minute < 20
-                and today_str != last_rotation_check_kst_date
+        # ════ v6.3/6.7: 매 시간 회전 체크 (09:10, 10:10, ..., 14:10) ═══════
+        # 점수 차 ≥ 20점 임계치가 자체 필터 — 정말 큰 변동 시만 트리거
+        # 캐시 (10분 TTL) 덕에 비용 거의 0
+        if (9 <= now.hour <= 14 and 10 <= now.minute < 20
+                and now.hour != last_rotation_check_kst_hour
                 and is_trading_day(now)
                 and DOM_STRATEGY_MODE == "clenow"
                 and dom_pos):
@@ -1170,7 +1171,7 @@ def main():
                                     bought["strategy_type"] = "CLENOW"
                                     dom_pos[buy_info["ticker"]] = bought
                                     trade_count += 2  # sell + buy
-                last_rotation_check_kst_date = today_str
+                last_rotation_check_kst_hour = now.hour
             except Exception as e:
                 print(f"[MAIN] rotation 체크 err: {type(e).__name__}: {e}")
 
