@@ -118,6 +118,14 @@ def buy_market(ticker: str, name: str, reason: str = "스윙 진입",
     target = min(int(total * position_pct), available)
     qty = target // current_price
 
+    # v6.8: 진입 조건 통과한 종목은 최소 1주 매수 보장
+    # (RISK_PARITY 가 target 을 주가 아래로 깎아 skip 되는 케이스 방지)
+    if qty == 0 and current_price <= available and current_price <= total * 0.5:
+        # 안전 한도: 단일 포지션이 총평가의 50% 넘지 않을 때만 1주 floor
+        target = current_price
+        qty = 1
+        print(f"[TRADER] {ticker} RISK_PARITY 로 0주 → 최소 1주 floor 적용")
+
     if qty == 0:
         msg = (f"⚠️ 매수 스킵: {name}({ticker})\n"
                f"현재가 ₩{current_price:,} > 종목당 예산 ₩{target:,}\n"
