@@ -288,13 +288,17 @@ def buy_overseas(ticker: str, name: str, exchange: str,
     else:
         ord_qty_str = str(int(qty))
 
+    # v6.13: 미국주 KIS 주문은 지정가 (limit) 필수.
+    # OVRS_ORD_UNPR="0" 보내면 KIS 가 "$0.01 미만 온라인 주문 불가" 에러.
+    # 현재가의 +0.5% 위로 limit 걸어 거의 즉시 체결 (시장가에 가깝게).
+    limit_price = round(current_price * 1.005, 2)
     body = {
         "CANO": acc_no,
         "ACNT_PRDT_CD": acc_prod,
         "OVRS_EXCG_CD": exchange,
         "PDNO": ticker,
         "ORD_QTY": ord_qty_str,
-        "OVRS_ORD_UNPR": "0",
+        "OVRS_ORD_UNPR": f"{limit_price:.2f}",
         "ORD_SVR_DVSN_CD": "0",
         "ORD_DVSN": "00",
     }
@@ -350,13 +354,15 @@ def sell_overseas(ticker: str, name: str, exchange: str, qty: float,
 
     current_price = _get_price_safe(exchange, ticker)
 
+    # v6.13: 매도도 지정가. 현재가의 -0.5% (즉시 체결, 슬리피지 허용)
+    sell_limit = round(current_price * 0.995, 2) if current_price > 0 else 0.0
     body = {
         "CANO": acc_no,
         "ACNT_PRDT_CD": acc_prod,
         "OVRS_EXCG_CD": exchange,
         "PDNO": ticker,
         "ORD_QTY": ord_qty_str,
-        "OVRS_ORD_UNPR": "0",
+        "OVRS_ORD_UNPR": f"{sell_limit:.2f}",
         "ORD_SVR_DVSN_CD": "0",
         "ORD_DVSN": "00",
     }
@@ -407,7 +413,12 @@ def sell_overseas(ticker: str, name: str, exchange: str, qty: float,
                 print(f"[OS_TRADER] intelligence log err: {e}")
         return True
     else:
-        msg = f"해외 매도 실패 {name}({ticker}): {data.get('msg1', '')}"
+        kis_msg = data.get("msg1", "")
+        msg = f"해외 매도 실패 {name}({ticker}): {kis_msg}"
         print(f"[OS_TRADER] {msg}")
-        telegram.send_error(msg)
+        # v6.13: 시간외/거래정지 등 예상 실패는 로그만
+        _expected = ("주문가능시간", "체결가능시간", "주문가능", "거래정지",
+                     "단주", "한도", "정지", "거부")
+        if not any(k in kis_msg for k in _expected):
+            telegram.send_error(msg)
         return False
