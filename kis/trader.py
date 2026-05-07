@@ -42,9 +42,15 @@ def get_account_balance() -> dict:
         )
         if data.get("rt_cd") == "0":
             o = data.get("output2", [{}])[0]
+            # v6.6: 가용금액 — KIS 여러 필드 중 max
+            avail = max(
+                int(float(o.get("nxdy_excc_amt", 0) or 0)),
+                int(float(o.get("prvs_rcdl_excc_amt", 0) or 0)),
+                int(float(o.get("dnca_tot_amt", 0) or 0)),
+            )
             return {
-                "total_eval": int(o.get("tot_evlu_amt", 0)),
-                "available_cash": int(o.get("prvs_rcdl_excc_amt", 0)),
+                "total_eval": int(float(o.get("tot_evlu_amt", 0) or 0)),
+                "available_cash": avail,
             }
     except Exception as e:
         print(f"[TRADER] 잔고 조회 오류: {e}")
