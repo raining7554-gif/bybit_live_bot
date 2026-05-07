@@ -136,7 +136,9 @@ def detect_overseas_regime() -> str:
 
 
 # v6.1: 진단 — 유니버스 각 종목이 왜 탈락했는지 한눈에
-def diagnose_overseas() -> dict:
+# v6.4: progress_callback 으로 진행률 텔레그램 갱신, sample_size 로 빠른 진단
+def diagnose_overseas(sample_size: int | None = None,
+                      progress_callback=None) -> dict:
     """모든 유니버스 종목의 진입 가능 상태를 진단.
 
     Returns: {
@@ -178,7 +180,17 @@ def diagnose_overseas() -> dict:
     results = []
     summary = {}
 
-    for stock in OS_UNIVERSE:
+    # v6.4: 빠른 진단 모드 — 처음 sample_size 종목만 (rate limit / 시간 절약)
+    universe = OS_UNIVERSE[:sample_size] if sample_size else OS_UNIVERSE
+    total = len(universe)
+
+    for idx, stock in enumerate(universe, 1):
+        # v6.4: 매 10종목마다 진행률 콜백
+        if progress_callback and idx % 10 == 1:
+            try:
+                progress_callback(idx, total)
+            except Exception:
+                pass
         ticker = stock["ticker"]
         name = stock["name"]
         exchange = stock["exchange"]
@@ -241,7 +253,9 @@ def diagnose_overseas() -> dict:
         "qqq_panic": qqq_panic,
         "results":  results,
         "summary":  summary,
-        "universe_size": len(OS_UNIVERSE),
+        "universe_size": total,
+        "universe_full": len(OS_UNIVERSE),
+        "sampled":  total < len(OS_UNIVERSE),
         "budget_usd": OS_POSITION_USD,
     }
 
@@ -256,13 +270,16 @@ def format_diagnose_msg(d: dict) -> str:
     summary = d.get("summary", {})
     results = d.get("results", [])
     universe = d.get("universe_size", 0)
+    full_size = d.get("universe_full", universe)
     budget = d.get("budget_usd", 0)
+    sampled = d.get("sampled", False)
 
     regime_icon = {"BULL": "🟢", "SIDEWAYS": "🟡", "BEAR": "🔴"}.get(regime, "⚪")
     panic_str = " ⚠️QQQ패닉" if panic else ""
+    size_str = f"{universe}/{full_size}종 샘플" if sampled else f"{universe}종"
 
     header = (
-        f"🔍 <b>US 스캔 진단</b> (유니버스 {universe}종, 1주 예산 ${budget})\n"
+        f"🔍 <b>US 스캔 진단</b> ({size_str}, 1주 예산 ${budget})\n"
         f"국면: {regime_icon} {regime}{panic_str}"
     )
     if regime == "BEAR":
