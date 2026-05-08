@@ -1103,10 +1103,16 @@ def main():
                                 os_pos[c["ticker"]] = res
                                 trade_count += 1
                                 bought_count += 1
-                        # v6.10: 후보 있는데 매수 0건이면 사유 알림 (1시간 dedup)
+                        # v6.10/6.17: 후보 있는데 매수 0건이면 사유 알림 (1시간 dedup)
                         if cands and bought_count == 0:
+                            try:
+                                fail_msg = trader_overseas.get_last_buy_fail_msg()
+                            except Exception:
+                                fail_msg = ""
+                            detail = f"\nKIS 응답: {fail_msg}" if fail_msg else ""
                             telegram.send(
-                                f"⚠️ 후보 {len(cands)}종 발견했지만 매수 0건\n"
+                                f"⚠️ 후보 {len(cands)}종 발견했지만 매수 0건"
+                                f"{detail}\n"
                                 f"가능 원인: 시간외 (정규: 22:30~05:00 KST), "
                                 f"가용잔고 부족, 또는 KIS 거부",
                                 dedup_sec=3600,
