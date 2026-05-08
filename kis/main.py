@@ -822,14 +822,14 @@ def main():
             telegram.send(f"⚠️ /news 오류: {type(e).__name__}: {e}")
 
     def cmd_scan_us():
-        """v6.1/6.4: US 유니버스 진단. 빠른 모드 (30종 샘플) + 진행률 갱신."""
+        """v6.15: US 유니버스 진단. 50종 샘플 (확장된 유니버스 대응)."""
         try:
-            telegram.send("🔍 US 스캔 진단 중... (30종 샘플, ~1분)")
+            telegram.send("🔍 US 스캔 진단 중... (50종 샘플, ~2분)")
             def _progress(i, total):
                 if i > 1:
                     print(f"[SCAN_US] {i}/{total} 진행 중", flush=True)
             d = scanner_overseas.diagnose_overseas(
-                sample_size=30, progress_callback=_progress)
+                sample_size=50, progress_callback=_progress)
             telegram.send(scanner_overseas.format_diagnose_msg(d), dedup_sec=10)
         except Exception as e:
             import traceback
