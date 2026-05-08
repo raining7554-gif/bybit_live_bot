@@ -401,6 +401,7 @@ def format_diagnose_msg(d: dict) -> str:
     if not d:
         return "🔍 US 스캔 진단 — 데이터 없음"
 
+    # v6.16: summary 카운트도 메시지 헤더에 추가
     regime = d.get("regime", "?")
     panic = d.get("qqq_panic", False)
     summary = d.get("summary", {})

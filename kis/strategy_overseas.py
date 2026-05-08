@@ -166,30 +166,28 @@ def check_os_entry(ticker: str, exchange: str, name: str = "") -> tuple:
     }
 
     if ma200 > 0 and ma50 <= ma200:
-        # v6.15: MA50>MA200 (장기 정배열) 못 만족시 단기 추세 fallback
-        # close > MA50 AND MA20 > MA50 — 단기 추세 형성 종목도 허용
-        ma_short_trend = (today_close > ma50) and (ma20 > ma50)
-        if not ma_short_trend:
-            return False, f"MA50({ma50:.1f})≤MA200({ma200:.1f}), 단기추세 X", metrics
-    if today_close <= ma20:
+        # v6.15: MA50>MA200 못 만족시 단기 추세 fallback
+        # v6.16: fallback 더 완화 — close>MA20 (단기 회복 종목도 허용)
+        if today_close <= ma20:
+            return False, f"MA 정배열 X & 종가≤MA20", metrics
+    elif today_close <= ma20:
         return False, f"종가≤MA20", metrics
-    # v6.15: RSI 범위 50~75 → 45~80 (약간 약세 + 더 강한 모멘텀 허용)
-    if not (45 <= rsi <= 80):
-        return False, f"RSI {rsi:.0f} 범위밖 (45~80)", metrics
-    # v6.15: 거래량 1.1x → 1.0x (평소 수준이어도 OK)
-    if avg_vol20 > 0 and today_vol < avg_vol20 * 1.0:
-        return False, f"거래량 부족 (<{avg_vol20:.0f})", metrics
+    # v6.16: RSI 45~80 → 35~85 (더 약세 + 더 강한 모멘텀 허용)
+    if not (35 <= rsi <= 85):
+        return False, f"RSI {rsi:.0f} 범위밖 (35~85)", metrics
+    # v6.16: 거래량 1.0x → 0.7x (평균보다 적어도 OK, dead-stock 만 차단)
+    if avg_vol20 > 0 and today_vol < avg_vol20 * 0.7:
+        return False, f"거래량 부족 (<{avg_vol20*0.7:.0f})", metrics
 
-    # 20일 고점 돌파 OR MA20 위
+    # 20일 고점 돌파 OR MA20 위 (이미 위에서 MA20 체크했으니 항상 통과)
     breakout = today_close > high_20
-    pullback = today_close > ma20
-    if not (breakout or pullback):
-        return False, "브레이크아웃/되돌림 패턴 아님", metrics
 
-    pattern = "20일고점돌파" if breakout else "MA20되돌림"
+    pattern = "20일고점돌파" if breakout else "MA20위"
     if ma200 > 0 and ma50 > ma200:
         trend_label = "MA50>200"
-    else:
+    elif ma50 > 0 and today_close > ma50:
         trend_label = "단기추세"
+    else:
+        trend_label = "약추세"
     reason = f"{pattern} {trend_label} RSI={rsi:.0f}"
     return True, reason, metrics
