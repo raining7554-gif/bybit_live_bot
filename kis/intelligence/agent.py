@@ -41,11 +41,45 @@ def _model() -> str:
 
 # ── Gemini REST 호출 ─────────────────────────────────────────────
 
+# v6.14: 일일 quota 추적 (429 후 당일 추가 호출 차단)
+import time as _t
+_quota_state: dict = {"date": "", "calls": 0, "exhausted": False}
+
+
+def _today_key() -> str:
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _quota_check_and_increment() -> tuple[bool, Optional[str]]:
+    """호출 전 quota 체크. (allowed, error_msg)."""
+    today = _today_key()
+    if _quota_state["date"] != today:
+        # 새로운 날 — 리셋
+        _quota_state["date"] = today
+        _quota_state["calls"] = 0
+        _quota_state["exhausted"] = False
+    if _quota_state["exhausted"]:
+        return False, "오늘 Gemini 무료 quota 소진 — 내일 자정 (UTC) 리셋"
+    _quota_state["calls"] += 1
+    return True, None
+
+
+def _quota_mark_exhausted():
+    """429 받으면 호출 — 당일 추가 호출 차단."""
+    _quota_state["exhausted"] = True
+    print(f"[AI quota] 오늘 소진됨 (호출 {_quota_state['calls']}회 후 429)", flush=True)
+
+
 def _call_gemini(prompt: str, *, want_json: bool = False,
                  timeout: int = 30) -> tuple[Optional[str], Optional[str]]:
     """단일 호출. (텍스트, 에러메시지) 튜플. 성공시 에러는 None."""
     if not _enabled():
         return None, "AI disabled"
+    # v6.14: quota 체크
+    allowed, qerr = _quota_check_and_increment()
+    if not allowed:
+        return None, qerr
     url = f"{_API_BASE}/{_model()}:generateContent?key={_api_key()}"
     body: dict = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -55,6 +89,9 @@ def _call_gemini(prompt: str, *, want_json: bool = False,
         body["generationConfig"]["responseMimeType"] = "application/json"
     try:
         r = requests.post(url, json=body, timeout=timeout)
+        if r.status_code == 429:
+            _quota_mark_exhausted()
+            return None, "오늘 Gemini quota 소진 (429) — 내일 자정 UTC 리셋"
         if r.status_code != 200:
             err = f"HTTP {r.status_code}: {r.text[:200]}"
             print(f"[AI {err}]", flush=True)
