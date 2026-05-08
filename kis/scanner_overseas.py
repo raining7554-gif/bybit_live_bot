@@ -1,9 +1,25 @@
-"""나스닥 스캐너 v6.12 — NASDAQ-100 + S&P 500 핵심 + 미드캡 (universe 55 → 120)
+"""나스닥 스캐너 v6.18 — NASDAQ-100 + S&P 500 + 미드캡 (universe 182종)
 
-유니버스 ~120종. 가격 필터 자동 (OS_POSITION_USD 초과 종목 제외, 단 fractional 모드시 OFF).
+유니버스 ~182종. 가격 필터 자동.
+v6.18: KIS 미등록 종목 세션 블랙리스트 (한 번 실패하면 같은 세션 재시도 안 함).
 """
 from config import OS_POSITION_USD
 from strategy_overseas import get_os_regime, check_os_entry, get_overseas_current
+
+# v6.18: KIS 미등록/거부 종목 세션 블랙리스트
+# buy 시도 후 "해당종목정보가 없습니다" 등 받으면 추가됨
+_session_blacklist: set[str] = set()
+
+
+def add_to_blacklist(ticker: str, reason: str = ""):
+    """KIS 거부된 종목을 세션 블랙리스트에 추가."""
+    if ticker not in _session_blacklist:
+        _session_blacklist.add(ticker)
+        print(f"[OS_SCANNER] 블랙리스트 추가: {ticker} ({reason})", flush=True)
+
+
+def get_blacklist() -> set[str]:
+    return _session_blacklist.copy()
 
 # v6.12: 유니버스 대폭 확장. 사용자 요청 "종목 더 많이보자".
 # 시드 작아도 자동 필터 (가격 > 예산이면 스킵), 모멘텀 후보 풀 다양화.
@@ -18,7 +34,7 @@ OS_UNIVERSE = [
     {"ticker": "AMZN",  "name": "아마존",          "exchange": "NAS"},
     {"ticker": "TSLA",  "name": "테슬라",          "exchange": "NAS"},
     {"ticker": "NFLX",  "name": "넷플릭스",        "exchange": "NAS"},
-    {"ticker": "BRK.B", "name": "버크셔B",         "exchange": "NYS"},
+    # BRK.B 제외 — KIS 가 dot 포함 ticker 처리 못함
     # ── 반도체 ────────────────────────────────────────────
     {"ticker": "AVGO",  "name": "브로드컴",        "exchange": "NAS"},
     {"ticker": "AMD",   "name": "AMD",             "exchange": "NAS"},
@@ -59,7 +75,7 @@ OS_UNIVERSE = [
     {"ticker": "TEAM",  "name": "아틀라시안",      "exchange": "NAS"},
     {"ticker": "TTD",   "name": "더트레이드데스크", "exchange": "NAS"},
     {"ticker": "GTLB",  "name": "깃랩",            "exchange": "NAS"},
-    {"ticker": "S",     "name": "센티넬원",        "exchange": "NYS"},
+    # S 제외 — 단일문자 ticker KIS 비호환
     # ── 핀테크 / 신성장 ─────────────────────────────
     {"ticker": "PLTR",  "name": "팔란티어",        "exchange": "NAS"},
     {"ticker": "COIN",  "name": "코인베이스",      "exchange": "NAS"},
@@ -202,7 +218,7 @@ OS_UNIVERSE = [
     {"ticker": "DOCN",  "name": "디지털오션",      "exchange": "NYS"},
     {"ticker": "BILL",  "name": "빌닷컴",          "exchange": "NYS"},
     {"ticker": "TWLO",  "name": "트윌리오",        "exchange": "NYS"},
-    {"ticker": "U",     "name": "유니티",          "exchange": "NYS"},
+    # U 제외 — 단일문자 ticker KIS 비호환
     {"ticker": "RDDT",  "name": "레딧",            "exchange": "NYS"},
     {"ticker": "APP",   "name": "앱러빈",          "exchange": "NAS"},
     {"ticker": "DASH",  "name": "도어대시",        "exchange": "NYS"},
@@ -230,6 +246,9 @@ def scan_overseas_candidates(exclude_tickers: list = None) -> list:
     for stock in OS_UNIVERSE:
         ticker = stock["ticker"]
         if ticker in exclude_tickers:
+            continue
+        # v6.18: 세션 블랙리스트 (KIS 미등록 종목) 자동 제외
+        if ticker in _session_blacklist:
             continue
 
         curr = get_overseas_current(ticker, stock["exchange"])
@@ -327,6 +346,9 @@ def diagnose_overseas(sample_size: int | None = None,
                 progress_callback(idx, total)
             except Exception:
                 pass
+        # v6.18: 블랙리스트 종목 진단도 스킵
+        if stock["ticker"] in _session_blacklist:
+            continue
         ticker = stock["ticker"]
         name = stock["name"]
         exchange = stock["exchange"]
