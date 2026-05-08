@@ -333,8 +333,24 @@ def buy_overseas(ticker: str, name: str, exchange: str,
         # v6.17: 마지막 KIS 실패 사유 저장 (main 의 0건 알림에 포함용)
         global _last_buy_fail_msg
         _last_buy_fail_msg = f"{ticker}: {kis_msg[:100]}"
+        # v6.18: KIS 미등록/거부 종목 → 세션 블랙리스트 자동 추가
+        # 이런 종목은 다시 시도해도 또 실패. scan 에서 미리 제외.
+        _blacklist_keywords = (
+            "해당종목정보",  # KIS 미등록
+            "정상매수",      # 매수 불가 종목
+            "거래불가",      # 거래 정지/제한
+            "투자불가",      # 투자 부적격
+            "투자유의",      # 유의 종목 일부 차단
+        )
+        if any(k in kis_msg for k in _blacklist_keywords):
+            try:
+                from scanner_overseas import add_to_blacklist
+                add_to_blacklist(ticker, kis_msg[:50])
+            except Exception:
+                pass
         # 시간외/예수금 등 예상 실패는 텔레그램 알림 생략 (로그만)
-        _expected = ("주문가능시간", "체결가능시간", "거래정지", "단주", "정지")
+        _expected = ("주문가능시간", "체결가능시간", "거래정지", "단주", "정지",
+                     "해당종목정보", "정상매수")
         if not any(k in kis_msg for k in _expected):
             telegram.send_error(msg)
         return None
