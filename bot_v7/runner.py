@@ -571,15 +571,13 @@ def _heartbeat(equity: float):
 
 # ── 주기 작업 ───────────────────────────────────────────────────
 def _maybe_run_regime(symbol: str, df15, df1h, df4h):
-    """심볼별 레짐 분류 (1시간 간격)."""
-    if not cfg.AI_ENABLED or not cfg.GEMINI_API_KEY:
-        return
-    last = _last_regime_call_ts.get(symbol, 0.0)
-    if time.time() - last < cfg.AI_REGIME_INTERVAL_SEC:
-        return
-    _last_regime_call_ts[symbol] = time.time()
-    snap = ai.market_snapshot(df15, df1h, df4h)
-    ai.detect_regime_async(snap, asset=symbol, send_telegram=True)
+    """심볼별 레짐 분류 (1시간 간격).
+
+    v6.14: AI 호출 비활성화 (Gemini quota 절약).
+    v6.0 룰 분류기 (regime.classify) 가 실시간 + 무료로 대체.
+    되살리려면 cfg.AI_REGIME_INTERVAL_SEC 줄이고 이 함수 본체 복원.
+    """
+    return  # AI 레짐 호출 차단 — 룰 분류기 사용
 
 
 def _maybe_run_weekly_review():
