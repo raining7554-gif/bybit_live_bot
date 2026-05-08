@@ -330,15 +330,25 @@ def buy_overseas(ticker: str, name: str, exchange: str,
         kis_msg = data.get("msg1", "")
         msg = f"해외 매수 실패 {name}({ticker}): {kis_msg}"
         print(f"[OS_TRADER] {msg}")
-        # v6.9: 예상 가능한 실패는 로그만 (텔레그램 스팸 방지)
-        # - 시간 외 (프리/애프터마켓) 주문 거부
-        # - 가용금액 부족
-        # - 거래정지 / 단주
-        _expected = ("주문가능시간", "체결가능시간", "주문가능", "예수금",
-                     "주문가능금액", "거래정지", "단주", "한도", "정지", "거부")
+        # v6.17: 마지막 KIS 실패 사유 저장 (main 의 0건 알림에 포함용)
+        global _last_buy_fail_msg
+        _last_buy_fail_msg = f"{ticker}: {kis_msg[:100]}"
+        # 시간외/예수금 등 예상 실패는 텔레그램 알림 생략 (로그만)
+        _expected = ("주문가능시간", "체결가능시간", "거래정지", "단주", "정지")
         if not any(k in kis_msg for k in _expected):
             telegram.send_error(msg)
         return None
+
+
+# v6.17: 마지막 매수 실패 사유 (main 에서 진단 알림에 사용)
+_last_buy_fail_msg: str = ""
+
+def get_last_buy_fail_msg() -> str:
+    """마지막 buy_overseas 실패 사유 반환 후 초기화."""
+    global _last_buy_fail_msg
+    msg = _last_buy_fail_msg
+    _last_buy_fail_msg = ""
+    return msg
 
 
 def sell_overseas(ticker: str, name: str, exchange: str, qty: float,
