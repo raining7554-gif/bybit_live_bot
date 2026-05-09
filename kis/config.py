@@ -60,9 +60,12 @@ OS_SCAN_TIME_END    = os.environ.get("OS_SCAN_TIME_END", "10:00")
 OS_EOD_CHECK        = os.environ.get("OS_EOD_CHECK", "05:45")  # 미장 종료 직전 일봉 청산 체크
 
 # 포지션
-# v6.2: $1300 USD 기준 — 우량주 1주 가격 ($200~$500) 커버 위해 budget 증액
-OS_MAX_POSITIONS  = int(os.environ.get("OS_MAX_POSITIONS", "2"))
-OS_POSITION_USD   = float(os.environ.get("OS_POSITION_USD", "600"))   # 1종목당 $600
+# v6.21: 국장 Clenow 처럼 — 최대 8 분산, 종목당 USD 자동 (가용 / 8 비례)
+# 사용자 요청: "종목당 비용이랑 최대 보유는 국장처럼해줘"
+OS_MAX_POSITIONS  = int(os.environ.get("OS_MAX_POSITIONS", "8"))
+# OS_POSITION_USD: 절대 cap. 가용잔고가 작으면 자동으로 가용/8 적용됨 (calc 단계).
+# 시드 $1300 → 자동 $162/종목, 시드 $5000 → $625/종목 (cap 적용시 OS_POSITION_USD)
+OS_POSITION_USD   = float(os.environ.get("OS_POSITION_USD", "600"))
 OS_QQQ_BASE_USD   = 50              # QQQ 방어용 베이스 (상승장에서만)
 
 # v6.2: 미국주 소수점 매매 (fractional shares) 지원

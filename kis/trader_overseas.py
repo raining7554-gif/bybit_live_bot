@@ -210,12 +210,25 @@ def calc_overseas_qty(price_usd: float, budget_override: float | None = None,
 
     v4.0: atr_pct + RISK_PARITY_ENABLED 면 변동성 기반 사이즈 조정.
     v6.2: US_FRACTIONAL_ENABLED 면 소수점 4자리, 아니면 정수.
+    v6.21: 국장 Clenow 처럼 — 가용잔고 / OS_MAX_POSITIONS 자동 분배.
+           OS_POSITION_USD 는 cap 으로 작용 (시드 클 때 한 종목 비대화 방지).
     """
     if price_usd <= 0:
         return 0.0
     balance = get_overseas_balance()
     available = balance["available_usd"]
-    budget = budget_override if budget_override else OS_POSITION_USD
+    if budget_override:
+        budget = budget_override
+    else:
+        # v6.21: 가용 / max_positions 동적 분배 + OS_POSITION_USD cap
+        try:
+            from config import OS_MAX_POSITIONS as _maxpos
+        except ImportError:
+            _maxpos = 8
+        # 시작 잔고 기준 분할 (이미 들고있는 종목 제외 안 함 — main 의 max_pos 가 처리)
+        # 95% × available / max_positions = 분산 슬리브 (5% 버퍼)
+        per_position = (available * 0.95) / max(_maxpos, 1)
+        budget = min(per_position, OS_POSITION_USD)
 
     if budget_override is None:
         try:
