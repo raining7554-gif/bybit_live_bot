@@ -18,23 +18,24 @@ import numpy as np
 import pandas as pd
 
 # ── 임계값 ───────────────────────────────────────────────────
+# v6.23: 진입 빈도 늘리려 완화 (사용자: "비트봇도 조금 완화할까? 너무 안들어가긴 하더라")
 ATR_STOP_MULT = 1.5
 TIME_STOP_BARS = 16        # 16 × 15m = 4h 미반전시 강제 청산
-ADX_CHOP_MAX = 30.0
-RSI_OVERSOLD = 35.0
-RSI_OVERBOUGHT = 65.0
-BB_POS_LOW = 0.15
-BB_POS_HIGH = 0.85
-VOL_SPIKE_MIN = 1.5         # 거래량 스파이크 (반전 신뢰도)
+ADX_CHOP_MAX = 32.0        # 30 → 32 (약간 더 추세 있어도 MR 허용)
+RSI_OVERSOLD = 38.0        # 35 → 38 (덜 극단적이어도 OK)
+RSI_OVERBOUGHT = 62.0      # 65 → 62
+BB_POS_LOW = 0.20          # 0.15 → 0.20 (덜 극단적이어도 OK)
+BB_POS_HIGH = 0.80         # 0.85 → 0.80
+VOL_SPIKE_MIN = 1.3        # 1.5 → 1.3 (capitulation 조건 완화)
 COOLDOWN_BARS_LOSS = 4
 COOLDOWN_BARS_WIN = 2
 
 # ── 점수 → 마진 tier (D 와 다른 보수적 사이즈) ───────────
-SCORE_MIN = 50.0
+SCORE_MIN = 45.0           # 50 → 45 (점수 임계치 완화)
 TIER_THRESHOLDS = [
-    (50.0, "low",    0.10),  # 50-59 score → 10% margin
-    (60.0, "med",    0.20),  # 60-79 score → 20% margin
-    (80.0, "high",   0.35),  # 80+    score → 35% margin
+    (45.0, "low",    0.10),  # 45-59 → 10% margin
+    (60.0, "med",    0.20),  # 60-79 → 20%
+    (80.0, "high",   0.35),  # 80+   → 35%
 ]
 
 
