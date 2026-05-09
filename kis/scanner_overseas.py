@@ -150,12 +150,7 @@ OS_UNIVERSE = [
     {"ticker": "XOM",   "name": "엑손모빌",        "exchange": "NYS"},
     {"ticker": "CVX",   "name": "셰브론",          "exchange": "NYS"},
     {"ticker": "OXY",   "name": "옥시덴탈",        "exchange": "NYS"},
-    # ── China ADR (옵션) ────────────────────
-    {"ticker": "BABA",  "name": "알리바바",        "exchange": "NYS"},
-    {"ticker": "JD",    "name": "징둥",            "exchange": "NAS"},
-    {"ticker": "PDD",   "name": "핀둬둬",          "exchange": "NAS"},
-    {"ticker": "BIDU",  "name": "바이두",          "exchange": "NAS"},
-    {"ticker": "NIO",   "name": "니오",            "exchange": "NYS"},
+    # ── China ADR 제외 (KIS 정책 / 변동성 / 규제 리스크) ────────
     # ── 인덱스 / 테마 ETF ────────────────────────────────
     {"ticker": "QQQ",   "name": "나스닥100 ETF",   "exchange": "NAS"},
     {"ticker": "SPY",   "name": "S&P500 ETF",      "exchange": "AMS"},
@@ -187,7 +182,7 @@ OS_UNIVERSE = [
     {"ticker": "PINS",  "name": "핀터레스트",      "exchange": "NYS"},
     {"ticker": "SNAP",  "name": "스냅",            "exchange": "NYS"},
     {"ticker": "SPOT",  "name": "스포티파이",      "exchange": "NYS"},
-    {"ticker": "DKNG",  "name": "드래프트킹스",    "exchange": "NAS"},
+    # 도박주 제외: DKNG, MGM 등 (KIS 정책 / 변동성)
     {"ticker": "CPNG",  "name": "쿠팡",            "exchange": "NYS"},
     # ── 바이오 미드캡 ─────────────────────
     {"ticker": "BIIB",  "name": "바이오젠",        "exchange": "NAS"},
