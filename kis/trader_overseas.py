@@ -17,6 +17,23 @@ except Exception as _e:
     print(f"[OS_TRADER] intelligence import skip: {_e}")
 
 
+# v6.19: KIS 가격조회 거래소코드 (NAS/NYS/AMS) ↔ 주문/잔고 거래소코드 (NASD/NYSE/AMEX) 매핑
+# get_overseas_current / scan 은 NAS/NYS/AMS 사용, 주문은 NASD/NYSE/AMEX 필요.
+# 코드 미매핑이 "해당종목정보가 없습니다" 거부의 근본 원인.
+_EXCH_TRADE_MAP = {
+    "NAS": "NASD",
+    "NYS": "NYSE",
+    "AMS": "AMEX",
+    # 이미 주문 형식인 경우 그대로 통과
+    "NASD": "NASD", "NYSE": "NYSE", "AMEX": "AMEX",
+}
+
+
+def _to_trade_excd(exchange: str) -> str:
+    """가격조회 코드 → 주문 코드 매핑."""
+    return _EXCH_TRADE_MAP.get(exchange.upper(), "NASD")
+
+
 def _safe_float(v, default: float = 0.0) -> float:
     """API 가 빈 문자열/None 돌려줘도 안전하게 0 으로."""
     if v is None or v == "":
@@ -295,7 +312,7 @@ def buy_overseas(ticker: str, name: str, exchange: str,
     body = {
         "CANO": acc_no,
         "ACNT_PRDT_CD": acc_prod,
-        "OVRS_EXCG_CD": exchange,
+        "OVRS_EXCG_CD": _to_trade_excd(exchange),  # v6.19: NAS→NASD 등 매핑
         "PDNO": ticker,
         "ORD_QTY": ord_qty_str,
         "OVRS_ORD_UNPR": f"{limit_price:.2f}",
@@ -385,7 +402,7 @@ def sell_overseas(ticker: str, name: str, exchange: str, qty: float,
     body = {
         "CANO": acc_no,
         "ACNT_PRDT_CD": acc_prod,
-        "OVRS_EXCG_CD": exchange,
+        "OVRS_EXCG_CD": _to_trade_excd(exchange),  # v6.19: NAS→NASD 등 매핑
         "PDNO": ticker,
         "ORD_QTY": ord_qty_str,
         "OVRS_ORD_UNPR": f"{sell_limit:.2f}",
