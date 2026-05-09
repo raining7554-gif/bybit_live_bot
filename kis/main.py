@@ -836,6 +836,70 @@ def main():
             traceback.print_exc()
             telegram.send(f"⚠️ /scan_us 오류: {type(e).__name__}: {e}")
 
+    def cmd_test_us():
+        """v6.20: KIS 거래소 코드 매핑 검증 (실주문 X).
+
+        inquire-psamount 로 dry-run 체크. 종목별 KIS 인식 여부 확인.
+        """
+        import trader_overseas as _ot
+        # 가격조회 코드 → 주문 코드 매핑 정상 동작 검증
+        from trader_overseas import _to_trade_excd
+
+        samples = [
+            ("NVDA",  "NAS", "엔비디아"),    # 가격코드 NAS → 주문 NASD
+            ("JPM",   "NYS", "JP모간"),       # NYS → NYSE
+            ("SPY",   "AMS", "S&P500 ETF"),   # AMS → AMEX
+        ]
+        lines = ["🧪 <b>KIS 거래소 코드 매핑 테스트</b>"]
+
+        # 1) 매핑 함수 (정적)
+        lines.append("\n1️⃣ 매핑 함수:")
+        for src in ("NAS", "NYS", "AMS"):
+            mapped = _to_trade_excd(src)
+            lines.append(f"   {src} → {mapped}")
+
+        # 2) KIS API 호출 (dry-run inquire-psamount)
+        lines.append("\n2️⃣ KIS API 응답 (실주문 X):")
+        from kis_auth import get as _api_get
+        from config import ACCOUNT_NO, IS_PAPER
+        parts = ACCOUNT_NO.split("-")
+        acc_no = parts[0]
+        acc_prod = parts[1] if len(parts) > 1 else "01"
+        tr_id = "VTTT3007R" if IS_PAPER else "JTTT3007R"
+
+        for ticker, exch_src, name in samples:
+            mapped = _to_trade_excd(exch_src)
+            try:
+                data = _api_get(
+                    "/uapi/overseas-stock/v1/trading/inquire-psamount",
+                    tr_id,
+                    {
+                        "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
+                        "OVRS_EXCG_CD": mapped,
+                        "OVRS_ORD_UNPR": "100",
+                        "ITEM_CD": ticker,
+                    },
+                )
+                rt = data.get("rt_cd", "?")
+                msg = data.get("msg1", "")[:80]
+                if rt == "0":
+                    o = data.get("output", {})
+                    avail = o.get("ord_psbl_frcr_amt", "?")
+                    lines.append(
+                        f"   ✅ {name}({ticker}/{mapped}) — 가용 ${avail}"
+                    )
+                else:
+                    lines.append(
+                        f"   ❌ {name}({ticker}/{mapped}) — rt={rt}: {msg}"
+                    )
+            except Exception as e:
+                lines.append(
+                    f"   ⚠️ {name}({ticker}/{mapped}) — 예외: {type(e).__name__}: {str(e)[:60]}"
+                )
+
+        lines.append("\n→ 모두 ✅ 면 v6.19 매핑 정상 작동")
+        telegram.send("\n".join(lines))
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
@@ -844,6 +908,7 @@ def main():
         "/diagnose": cmd_diagnose,
         "/news":    cmd_news,
         "/scan_us": cmd_scan_us,
+        "/test_us": cmd_test_us,
     }
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
