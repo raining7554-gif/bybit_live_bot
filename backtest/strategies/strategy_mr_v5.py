@@ -31,9 +31,11 @@ COOLDOWN_BARS_LOSS = 4
 COOLDOWN_BARS_WIN = 2
 
 # ── 점수 → 마진 tier (D 와 다른 보수적 사이즈) ───────────
-SCORE_MIN = 45.0           # 50 → 45 (점수 임계치 완화)
+# v6.25: mr_low (45-59) 가 데이터상 손실 주요 원인 (39건 -$34 분석)
+# mr_med (60-79) 는 100% 승률 → mr_low 차단, mr_med+ 만 진입
+SCORE_MIN = 55.0
 TIER_THRESHOLDS = [
-    (45.0, "low",    0.10),  # 45-59 → 10% margin
+    (55.0, "low",    0.10),  # 55-59 → 10% margin (좁은 진입 영역)
     (60.0, "med",    0.20),  # 60-79 → 20%
     (80.0, "high",   0.35),  # 80+   → 35%
 ]
