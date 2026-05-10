@@ -1119,9 +1119,22 @@ def main():
                     last_os_mon = now
 
                 # 진입 스캔 (전 미장 시간)
-                if (is_os_scan_time() and not total_circuit_tripped
-                        and len(os_pos) < OS_MAX_POSITIONS):
-                    if elapsed(last_os_scan) >= SCAN_INTERVAL_SEC:
+                # v6.24: 미국 휴장일 감지시 스캔 스킵 (자정 UTC 자동 리셋)
+                _us_holiday = False
+                try:
+                    _us_holiday = trader_overseas.is_us_holiday_today()
+                except Exception:
+                    pass
+                if _us_holiday:
+                    # 4시간 dedup 으로 알림 (1회만 전달)
+                    telegram.send(
+                        f"🏖️ 미국 휴장일 — 미장 스캔 일시 중단",
+                        dedup_sec=14400,
+                    )
+                    last_os_scan = now  # 스캔 카운트만 갱신, 실제 스캔 X
+                elif (is_os_scan_time() and not total_circuit_tripped
+                        and len(os_pos) < OS_MAX_POSITIONS
+                        and elapsed(last_os_scan) >= SCAN_INTERVAL_SEC):
                         # v6.11: 스캔 시작 알림 (1시간 dedup)
                         telegram.send(
                             f"🔭 미장 스캔 시작 ({hhmm()} KST) — KIS 일봉 조회 중 (~1~3분)",

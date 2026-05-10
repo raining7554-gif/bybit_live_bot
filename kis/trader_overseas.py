@@ -363,14 +363,16 @@ def buy_overseas(ticker: str, name: str, exchange: str,
         # v6.17: 마지막 KIS 실패 사유 저장 (main 의 0건 알림에 포함용)
         global _last_buy_fail_msg
         _last_buy_fail_msg = f"{ticker}: {kis_msg[:100]}"
-        # v6.18: KIS 미등록/거부 종목 → 세션 블랙리스트 자동 추가
-        # 이런 종목은 다시 시도해도 또 실패. scan 에서 미리 제외.
+        # v6.18/v6.24: KIS 미등록/거부 종목 → 세션 블랙리스트 자동 추가
+        # v6.24 추가: ETP 미신청 (계좌 권한 X), 휴장일은 매일 다르니 블랙리스트 X
         _blacklist_keywords = (
             "해당종목정보",  # KIS 미등록
             "정상매수",      # 매수 불가 종목
             "거래불가",      # 거래 정지/제한
             "투자불가",      # 투자 부적격
             "투자유의",      # 유의 종목 일부 차단
+            "ETP",           # v6.24: 해외 ETP 미신청 계좌 (SOXX/XLK 등)
+            "미신청",        # 계좌 권한 미신청
         )
         if any(k in kis_msg for k in _blacklist_keywords):
             try:
@@ -378,9 +380,14 @@ def buy_overseas(ticker: str, name: str, exchange: str,
                 add_to_blacklist(ticker, kis_msg[:50])
             except Exception:
                 pass
-        # 시간외/예수금 등 예상 실패는 텔레그램 알림 생략 (로그만)
+        # v6.24: 글로벌 휴장일 — 다음 스캔 전체 차단 신호 (전역 플래그)
+        global _us_holiday_today
+        if "휴장" in kis_msg:
+            _us_holiday_today = True
+        # 시간외/예수금/휴장일/ETP 등 예상 실패는 텔레그램 알림 생략 (로그만)
         _expected = ("주문가능시간", "체결가능시간", "거래정지", "단주", "정지",
-                     "해당종목정보", "정상매수")
+                     "해당종목정보", "정상매수", "휴장", "ETP", "미신청",
+                     "거래불가", "투자불가", "투자유의")
         if not any(k in kis_msg for k in _expected):
             telegram.send_error(msg)
         return None
@@ -388,6 +395,20 @@ def buy_overseas(ticker: str, name: str, exchange: str,
 
 # v6.17: 마지막 매수 실패 사유 (main 에서 진단 알림에 사용)
 _last_buy_fail_msg: str = ""
+
+# v6.24: 미국 휴장일 감지 — 한 번 휴장 응답 받으면 당일 모든 매수 차단
+_us_holiday_today: bool = False
+_us_holiday_date: str = ""
+
+def is_us_holiday_today() -> bool:
+    """오늘 미국 휴장일이면 True. 자정 (UTC) 자동 리셋."""
+    global _us_holiday_date, _us_holiday_today
+    from datetime import datetime
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    if _us_holiday_date != today:
+        _us_holiday_date = today
+        _us_holiday_today = False
+    return _us_holiday_today
 
 def get_last_buy_fail_msg() -> str:
     """마지막 buy_overseas 실패 사유 반환 후 초기화."""
