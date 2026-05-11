@@ -117,25 +117,20 @@ def _check_signal_v5(row, row_h4) -> tuple[str, str, float]:
         h4_strong_up = (row_h4.close > row_h4.ema200) and (row_h4.ema50 > row_h4.ema200)
         h4_strong_down = (row_h4.close < row_h4.ema200) and (row_h4.ema50 < row_h4.ema200)
 
-    # 거래량 스파이크 확인 (capitulation 신호)
+    # 거래량 스파이크 (점수에 이미 포함 — v6.26: hard gate 제거, score 만 신뢰)
     vol_ratio = float(row.get("vol_ratio", 1.0))
-    vol_spike = vol_ratio >= VOL_SPIKE_MIN
 
     # ── LONG ──
     if row.bb_pos < BB_POS_LOW and row.rsi < RSI_OVERSOLD and bullish:
         if h4_strong_down:
             return "none", "4H 강한 약세 — long 차단", score
-        if not vol_spike:
-            return "none", f"vol {vol_ratio:.2f}x < {VOL_SPIKE_MIN} (capitulation 부족)", score
-        return "long", "oversold + 반전 + 거래량", score
+        return "long", f"oversold + 반전 (vol {vol_ratio:.1f}x)", score
 
     # ── SHORT ──
     if row.bb_pos > BB_POS_HIGH and row.rsi > RSI_OVERBOUGHT and bearish:
         if h4_strong_up:
             return "none", "4H 강한 강세 — short 차단", score
-        if not vol_spike:
-            return "none", f"vol {vol_ratio:.2f}x < {VOL_SPIKE_MIN}", score
-        return "short", "overbought + 반전 + 거래량", score
+        return "short", f"overbought + 반전 (vol {vol_ratio:.1f}x)", score
 
     return "none", "no extreme", score
 
