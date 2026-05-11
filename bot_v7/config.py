@@ -55,9 +55,10 @@ MAX_TOTAL_MARGIN = float(os.environ.get("MAX_TOTAL_MARGIN", "0.90"))
 SCORE_EXP = float(os.environ.get("SCORE_EXP", "1.0"))
 
 # ─── Strategy D v9 (5-tier aggressive + per-tier exit + per-tier margin) ──
-# v5.0: D 트렌드 추종은 데이터로 검증 실패 (32% 승률, 점수 역상관).
-# STRATEGY_MODE=MR 로 설정시 D 비활성화, MR primary.
-STRATEGY_MODE     = os.environ.get("STRATEGY_MODE", "MR").upper()  # "D" / "MR" / "BOTH"
+# v5.0: D 단독 32% 승률 (횡보장 데이터)
+# v6.27: STRATEGY_MODE=BOTH 기본 — 추세장(ADX>32) D 작동, 횡보장 MR 작동
+#        MR 코드에 ADX>32 hard gate 있어서 자동 분리됨
+STRATEGY_MODE     = os.environ.get("STRATEGY_MODE", "BOTH").upper()  # "D" / "MR" / "BOTH"
 ENTRY_MIN_SCORE   = 55.0
 SCORE_TIER_MICRO  = 60.0   # 55..59 → 3x
 SCORE_TIER_PROBE  = 70.0   # 60..69 → 5x
