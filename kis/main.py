@@ -206,15 +206,65 @@ def load_kr_holdings() -> dict:
 
 
 def load_us_holdings() -> dict:
-    """KIS overseas inquire-present-balance → os_pos dict."""
+    """KIS overseas 보유 종목 조회 → os_pos dict.
+
+    v6.31: 2단계 fallback.
+    1차: inquire-balance (TTTS3012R) — 표준 보유종목 조회
+    2차: inquire-present-balance (CTRP6504R) — 종합잔고 (백업)
+    output1 이 비어있을 수 있어 두 endpoint 둘 다 시도.
+    """
+    parts = ACCOUNT_NO.split("-")
+    acc_no = parts[0]
+    acc_prod = parts[1] if len(parts) > 1 else "01"
+    exch_map = {"NASD": "NAS", "NYSE": "NYS", "AMEX": "AMS",
+                "TKSE": "TSE", "SEHK": "HKS"}
+    holdings: dict = {}
+
+    # 1차: 표준 보유종목 조회 (TTTS3012R) — 거래소별로 호출
+    tr_id_v1 = "VTTS3012R" if IS_PAPER else "TTTS3012R"
+    for exch_code in ("NASD", "NYSE", "AMEX"):
+        try:
+            data = api.get(
+                "/uapi/overseas-stock/v1/trading/inquire-balance",
+                tr_id_v1,
+                {
+                    "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
+                    "OVRS_EXCG_CD": exch_code,
+                    "TR_CRCY_CD": "USD",
+                    "CTX_AREA_FK200": "", "CTX_AREA_NK200": "",
+                },
+            )
+            if data.get("rt_cd") != "0":
+                print(f"[SYNC_US v1] {exch_code} 실패: {data.get('msg1', '')[:80]}")
+                continue
+            for item in data.get("output1", []):
+                qty = float(item.get("ovrs_cblc_qty", 0) or 0)
+                if qty <= 0:
+                    continue
+                ticker = item.get("ovrs_pdno", item.get("pdno", "")).strip()
+                name = item.get("ovrs_item_name", item.get("prdt_name", ticker)).strip() or ticker
+                avg_price = float(item.get("pchs_avg_pric", 0) or 0)
+                if not ticker or avg_price <= 0:
+                    continue
+                # v1 응답엔 거래소 코드가 명시 안 됨 → 호출한 거래소 사용
+                exchange = exch_map.get(exch_code, "NAS")
+                holdings[ticker] = {
+                    "ticker": ticker, "name": name, "exchange": exchange,
+                    "qty": qty, "buy_price": avg_price,
+                    "market": "overseas",
+                }
+        except Exception as e:
+            print(f"[SYNC_US v1] {exch_code} 예외: {e}")
+
+    if holdings:
+        return holdings
+
+    # 2차: 종합잔고 fallback (output1 / output2 둘 다 시도)
     try:
-        parts = ACCOUNT_NO.split("-")
-        acc_no = parts[0]
-        acc_prod = parts[1] if len(parts) > 1 else "01"
-        tr_id = "VTRP6504R" if IS_PAPER else "CTRP6504R"
+        tr_id_v2 = "VTRP6504R" if IS_PAPER else "CTRP6504R"
         data = api.get(
             "/uapi/overseas-stock/v1/trading/inquire-present-balance",
-            tr_id,
+            tr_id_v2,
             {
                 "CANO": acc_no, "ACNT_PRDT_CD": acc_prod,
                 "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840",
@@ -222,9 +272,8 @@ def load_us_holdings() -> dict:
             },
         )
         if data.get("rt_cd") != "0":
-            print(f"[SYNC_US] 잔고 조회 실패: {data.get('msg1', '')}")
-            return {}
-        holdings = {}
+            print(f"[SYNC_US v2] 잔고 조회 실패: {data.get('msg1', '')[:120]}")
+            return holdings
         for item in data.get("output1", []):
             qty = float(item.get("ovrs_cblc_qty", 0) or 0)
             if qty <= 0:
@@ -232,21 +281,18 @@ def load_us_holdings() -> dict:
             ticker = item.get("pdno", "").strip()
             name = item.get("prdt_name", ticker).strip() or ticker
             avg_price = float(item.get("pchs_avg_pric", 0) or 0)
-            exchange = (item.get("ovrs_excg_cd", "") or "NAS").strip()
+            exchange = (item.get("ovrs_excg_cd", "") or "NASD").strip()
             if not ticker or avg_price <= 0:
                 continue
-            # KIS 의 거래소 코드 → 우리 코드 매핑
-            exch_map = {"NASD": "NAS", "NYSE": "NYS", "AMEX": "AMS"}
-            exchange = exch_map.get(exchange, exchange)
+            exchange = exch_map.get(exchange, "NAS")
             holdings[ticker] = {
                 "ticker": ticker, "name": name, "exchange": exchange,
                 "qty": qty, "buy_price": avg_price,
                 "market": "overseas",
             }
-        return holdings
     except Exception as e:
-        print(f"[SYNC_US] 예외: {e}")
-        return {}
+        print(f"[SYNC_US v2] 예외: {e}")
+    return holdings
 
 
 def sync_holdings_at_startup() -> tuple[dict, dict]:
@@ -900,6 +946,29 @@ def main():
         lines.append("\n→ 모두 ✅ 면 v6.19 매핑 정상 작동")
         telegram.send("\n".join(lines))
 
+    def cmd_sync_us():
+        """v6.31: US 보유 종목 재동기화 (기존 보유 인식 안 될 때 수동 트리거)."""
+        try:
+            telegram.send("♻️ US 보유 재동기화 중...")
+            us = load_us_holdings()
+            if not us:
+                telegram.send("⚠️ US 보유 0종 — KIS 응답에 잔고 없음 (또는 endpoint 실패)")
+                return
+            # 현재 os_pos 에 누락된 종목만 추가
+            added = []
+            for t, p in us.items():
+                if t not in os_pos:
+                    os_pos[t] = p
+                    added.append(t)
+            lines = [f"♻️ US 보유 {len(us)}종 동기화 완료"]
+            for t, p in us.items():
+                qd = f"{p['qty']:.4f}" if isinstance(p['qty'], float) and p['qty'] != int(p['qty']) else f"{int(p['qty'])}"
+                tag = " 🆕" if t in added else ""
+                lines.append(f"   {p['name']}({t}) {qd}주 @ ${p['buy_price']:.2f}{tag}")
+            telegram.send("\n".join(lines))
+        except Exception as e:
+            telegram.send(f"⚠️ /sync_us 오류: {type(e).__name__}: {e}")
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
@@ -909,6 +978,7 @@ def main():
         "/news":    cmd_news,
         "/scan_us": cmd_scan_us,
         "/test_us": cmd_test_us,
+        "/sync_us": cmd_sync_us,
     }
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
