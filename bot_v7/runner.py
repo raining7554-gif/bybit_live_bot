@@ -299,7 +299,11 @@ def _try_open(symbol: str, equity: float, signal: dict,
         "tp_price": signal.get("tp_price"),
         "tier": signal.get("tier", "high"),
         "tp_margin": signal.get("tp_margin"),
-        "strategy": "MR" if is_mr else "D",
+        # v6.28: D_INV (reverse) 트레이드 추적
+        "strategy": (
+            "MR" if is_mr
+            else ("D_INV" if signal.get("inverse") else "D")
+        ),
         "opened_ts": time.time(),
         "entry_snapshot": snapshot or {},
         "symbol": symbol,

@@ -60,6 +60,11 @@ SCORE_EXP = float(os.environ.get("SCORE_EXP", "1.0"))
 #        MR 코드에 ADX>32 hard gate 있어서 자동 분리됨
 STRATEGY_MODE     = os.environ.get("STRATEGY_MODE", "BOTH").upper()  # "D" / "MR" / "BOTH"
 ENTRY_MIN_SCORE   = 55.0
+# v6.28: D 점수 ≥ 70 (base/mid/high) 패자 분석 → 반대매매 (inverse) 시도
+# 데이터: 50건 -$94 손실 + 점수 역상관 (-5.3) + server_stop 56%
+# 70 점 이상은 추세 끝물 잡는 패턴 가설로 long ↔ short 반전
+# 환경변수로 임계치 조정 가능 (200 = 비활성)
+D_INVERSE_THRESHOLD = float(os.environ.get("D_INVERSE_THRESHOLD", "70"))
 SCORE_TIER_MICRO  = 60.0   # 55..59 → 3x
 SCORE_TIER_PROBE  = 70.0   # 60..69 → 5x
 SCORE_TIER_BASE   = 80.0   # 70..79 → 10x
