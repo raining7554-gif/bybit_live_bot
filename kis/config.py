@@ -38,7 +38,15 @@ DOM_MAX_HOLD_DAYS  = 10             # 최대 10영업일
 # v4.0: Clenow 모드 장중 비상 손절 — 블랙스완 방어
 # Clenow 철학(MA50 이탈로만 청산) 유지하되, 극단적 폭락만 cut.
 # 본인 시드 기준 -7% × 12.5% 배분 = -0.875% 잔고 영향. 작은 페널티로 대형 사고 방지.
-DOM_CLENOW_EMERGENCY_SL = 0.07      # 장중 -7% 도달시 즉시 청산
+# Clenow 철학(MA50 이탈로만 청산) 유지하되, 극단적 폭락만 cut.
+# v6.29: 3중 보호 — 하드 SL ↓ + 고점 트레일 + 일중 급락 감지
+DOM_CLENOW_EMERGENCY_SL = float(os.environ.get("DOM_CLENOW_EMERGENCY_SL", "0.05"))  # 0.07 → 0.05
+# v6.29: 고점 대비 트레일링 (수익 +N% 이상에서만 활성)
+DOM_CLENOW_PEAK_TRAIL_MIN_GAIN = float(os.environ.get("DOM_CLENOW_PEAK_TRAIL_MIN_GAIN", "0.05"))  # +5% 후 trail 시작
+DOM_CLENOW_PEAK_TRAIL_DROP     = float(os.environ.get("DOM_CLENOW_PEAK_TRAIL_DROP", "0.05"))      # 고점 대비 -5%
+# v6.29: 일중 급락 (Flash Crash) 감지 — 짧은 시간내 대폭 하락
+DOM_CLENOW_FLASH_DROP_PCT      = float(os.environ.get("DOM_CLENOW_FLASH_DROP_PCT", "0.04"))       # -4% 하락
+DOM_CLENOW_FLASH_DROP_MIN      = int(os.environ.get("DOM_CLENOW_FLASH_DROP_MIN", "30"))           # 30 분 내
 
 # ─────────────────────────────────────────────────────────
 # 해외(나스닥) 설정
