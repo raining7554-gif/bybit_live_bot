@@ -30,11 +30,76 @@ def get_current_price(ticker: str) -> int:
 def register_position(ticker: str, buy_price: float, strategy_type: str = "SWING"):
     _stops[ticker] = SwingStop(buy_price)
     _entry_dates[ticker] = date.today()
+    # v6.29: Clenow 보호용 — 고점 + 가격 이력 추적
+    _clenow_state[ticker] = {
+        "peak": buy_price,
+        "price_history": [],  # [(timestamp, price), ...] (last 30 min)
+    }
 
 
 def unregister(ticker: str):
     _stops.pop(ticker, None)
     _entry_dates.pop(ticker, None)
+    _clenow_state.pop(ticker, None)
+
+
+# v6.29: Clenow 종목별 추적 상태 (peak + 가격 이력)
+_clenow_state: dict = {}
+
+
+def _check_clenow_protections(ticker: str, pos: dict, current_price: float) -> tuple[bool, str]:
+    """v6.29: Clenow 종목 3중 보호 체크. (should_exit, reason)."""
+    import time as _t
+    try:
+        from config import (
+            DOM_CLENOW_EMERGENCY_SL,
+            DOM_CLENOW_PEAK_TRAIL_MIN_GAIN, DOM_CLENOW_PEAK_TRAIL_DROP,
+            DOM_CLENOW_FLASH_DROP_PCT, DOM_CLENOW_FLASH_DROP_MIN,
+        )
+    except ImportError:
+        return False, ""
+
+    buy = pos.get("buy_price", 0)
+    if buy <= 0:
+        return False, ""
+    pnl = (current_price - buy) / buy
+
+    # 1) 하드 SL (-5%)
+    if pnl <= -DOM_CLENOW_EMERGENCY_SL:
+        return True, f"비상손절 ({pnl*100:+.2f}%)"
+
+    # state 보장
+    if ticker not in _clenow_state:
+        _clenow_state[ticker] = {"peak": buy, "price_history": []}
+    st = _clenow_state[ticker]
+
+    # 고점 갱신
+    if current_price > st["peak"]:
+        st["peak"] = current_price
+
+    # 가격 이력 (최근 30분)
+    now_ts = _t.time()
+    st["price_history"].append((now_ts, current_price))
+    cutoff = now_ts - DOM_CLENOW_FLASH_DROP_MIN * 60
+    st["price_history"] = [(t, p) for t, p in st["price_history"] if t >= cutoff]
+
+    # 2) 고점 트레일링 (+5% 이상 수익 후 활성)
+    peak_gain = (st["peak"] - buy) / buy
+    if peak_gain >= DOM_CLENOW_PEAK_TRAIL_MIN_GAIN:
+        drop_from_peak = (current_price - st["peak"]) / st["peak"]
+        if drop_from_peak <= -DOM_CLENOW_PEAK_TRAIL_DROP:
+            return True, (f"고점트레일 ({peak_gain*100:+.1f}% 고점 → "
+                          f"{drop_from_peak*100:+.1f}% 풀백)")
+
+    # 3) 일중 급락 — 30분 내 -4% 이상 하락
+    if len(st["price_history"]) >= 2:
+        recent_high = max(p for _, p in st["price_history"])
+        rapid_drop = (current_price - recent_high) / recent_high
+        if rapid_drop <= -DOM_CLENOW_FLASH_DROP_PCT:
+            return True, (f"급락감지 ({DOM_CLENOW_FLASH_DROP_MIN}분내 "
+                          f"{rapid_drop*100:+.2f}%)")
+
+    return False, ""
 
 
 def _ensure_stop(ticker: str, pos: dict):
@@ -117,23 +182,17 @@ def check_positions(positions: dict) -> list:
             unregister(ticker)
             continue
 
-        # v4.0: CLENOW 모드 비상 손절 (-7% 블랙스완 방어)
+        # v6.29: CLENOW 모드 3중 보호 (하드 SL -5% / 고점 트레일 / 일중 급락)
         if pos.get("strategy_type") == "CLENOW":
-            try:
-                from config import DOM_CLENOW_EMERGENCY_SL
-            except ImportError:
-                DOM_CLENOW_EMERGENCY_SL = 0.07
-            buy = pos.get("buy_price", 0)
-            if buy > 0:
-                pnl = (current_price - buy) / buy
-                if pnl <= -DOM_CLENOW_EMERGENCY_SL:
-                    if trader.sell_market(
-                        ticker, pos["name"], pos["qty"], buy,
-                        f"비상손절 ({pnl*100:+.2f}%)"
-                    ):
-                        closed.append(ticker)
-                        unregister(ticker)
-            continue  # CLENOW: 비상 손절 외에는 EOD MA50 만
+            should_exit, reason = _check_clenow_protections(
+                ticker, pos, current_price)
+            if should_exit:
+                if trader.sell_market(
+                    ticker, pos["name"], pos["qty"], pos["buy_price"], reason
+                ):
+                    closed.append(ticker)
+                    unregister(ticker)
+            continue  # CLENOW: 3중 보호 외에는 EOD MA50 만
 
         # SWING 모드: 트레일링 + 하드 손절
         _ensure_stop(ticker, pos)
