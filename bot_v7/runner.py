@@ -269,10 +269,11 @@ def _try_open(symbol: str, equity: float, signal: dict,
         symbol_weight=sw,
     )
     if qty <= 0:
-        # 캡 도달했거나 사이즈 너무 작아서 skip
+        # v6.30: 캡 도달 알림 제거 (반복 알림 스팸). 로그만 유지.
         if active_margin >= cfg.MAX_TOTAL_MARGIN * 0.95:
-            tg.send(f"⏸️ [{_short(symbol)}] 마진 캡 도달 — 진입 skip "
-                    f"(사용 {active_margin*100:.0f}% / 한도 {cfg.MAX_TOTAL_MARGIN*100:.0f}%)")
+            print(f"[{_now_str()}] [{_short(symbol)}] 마진 캡 — 진입 skip "
+                  f"(사용 {active_margin*100:.0f}% / 한도 {cfg.MAX_TOTAL_MARGIN*100:.0f}%)",
+                  flush=True)
         return
 
     disaster_sl = entry_price * (1 - cfg.DISASTER_SL_PCT) if side == "Buy" \
