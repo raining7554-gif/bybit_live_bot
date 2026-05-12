@@ -103,13 +103,23 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
     if direction == "none" or score < cfg.ENTRY_MIN_SCORE:
         return None
 
-    # v8: RSI directional check REMOVED entirely
+    # v6.28: 점수 ≥ 70 (base/mid/high) 는 데이터상 패자 (50건 분석 -$94).
+    # 점수 역상관 (-5.3) + server_stop 56% → 추세 끝물 진입 패턴.
+    # 가설: 강한 D 신호 = 추세 극단 = 평균회귀 임박 → 반대 매매.
+    # 1~2주 라이브 검증, 데이터 안 좋으면 되돌림.
+    inverse_applied = False
+    if score >= cfg.D_INVERSE_THRESHOLD:
+        direction = "short" if direction == "long" else "long"
+        inverse_applied = True
 
     # 15m candle confirmation (kept — small filter)
-    if direction == "long" and row.close <= row.open:
-        return None
-    if direction == "short" and row.close >= row.open:
-        return None
+    # v6.28: 반대매매시 캔들 방향 체크도 반대로
+    if not inverse_applied:
+        if direction == "long" and row.close <= row.open:
+            return None
+        if direction == "short" and row.close >= row.open:
+            return None
+    # 반대매매면 캔들 방향 체크 스킵 (추세 끝물 잡는 거라 캔들 반전 기다리지 않음)
 
     atr = row.atr
     if pd.isna(atr) or atr <= 0:
@@ -138,6 +148,8 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
         "atr_15m":      float(atr),
         "tier":         tier,
         "tp_margin":    tp_margin,         # None for high tier
+        "tag":          "D_INV" if inverse_applied else "D",   # v6.28 트래킹
+        "inverse":      inverse_applied,
     }
 
 
