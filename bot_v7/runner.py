@@ -489,6 +489,40 @@ def _manage(symbol: str, df_15m: pd.DataFrame):
     atr_15m   = float(df_15m["atr"].iloc[-1]) if "atr" in df_15m.columns \
                 else pos.get("atr_15m", 0)
 
+    # v6.35 A1b: AI hold_check (high tier 수익 +5% 이상에서만, 30분 dedup)
+    if (cfg.AI_HOLD_CHECK_ENABLED
+            and pos.get("tier") in ("mid", "high")
+            and pos.get("peak_margin_pct", 0) >= cfg.AI_HOLD_CHECK_MIN_PROFIT
+            and (time.time() - pos.get("last_hold_check_ts", 0)) > 1800):
+        try:
+            snap_for_hold = {
+                "rsi": float(df_15m["rsi"].iloc[-1]) if "rsi" in df_15m.columns else None,
+                "bb_pos": float(df_15m["bb_pos"].iloc[-1]) if "bb_pos" in df_15m.columns else None,
+                "adx": float(df_15m["adx"].iloc[-1]) if "adx" in df_15m.columns else None,
+            }
+            hold_dec = ai.hold_check(symbol, pos, cur_px, snap_for_hold)
+            pos["last_hold_check_ts"] = time.time()
+            if hold_dec.get("action") == "exit" and hold_dec.get("confidence", 0) >= 0.6:
+                tg.send(
+                    f"🤖 [{_short(symbol)}] AI 조기청산 권고\n"
+                    f"사유: {hold_dec.get('reason', '')}\n"
+                    f"신뢰도 {hold_dec.get('confidence', 0)*100:.0f}%"
+                )
+                _close_current(symbol, "ai_exit", cur_px, ex.get_balance())
+                return
+            if hold_dec.get("action") == "tighten":
+                # peak_margin 강제 ↑ → dynamic trail 즉시 조여짐
+                pos["peak_margin_pct"] = max(
+                    pos.get("peak_margin_pct", 0),
+                    cfg.TRAIL_PEAK_VTIGHT_PCT
+                )
+                tg.send(
+                    f"🤖 [{_short(symbol)}] AI trail 강화 권고\n"
+                    f"사유: {hold_dec.get('reason', '')}"
+                )
+        except Exception as e:
+            print(f"[hold_check {symbol}] err: {e}", flush=True)
+
     decision = strat.evaluate_position_management(
         pos, atr_15m, cur_px, last_high, last_low,
     )
@@ -745,6 +779,49 @@ def _maybe_run_weekly_review():
     _last_weekly_review_kst = today
     print(f"[{_now_str()}] 📊 자동 주간 회고 트리거", flush=True)
     ai.weekly_review_async(verbose_errors=False)
+
+
+# v6.35 A3: 레짐 deep analysis 캐시 (4h 간격)
+_last_regime_deep_ts: float = 0.0
+_last_regime_deep: dict = {}
+
+
+def _maybe_run_regime_deep(symbol_dfs: dict):
+    """v6.35 A3: 4시간 간격 레짐 종합 분석 (룰 + AI)."""
+    global _last_regime_deep_ts, _last_regime_deep
+    if not cfg.AI_REGIME_DEEP_ENABLED:
+        return
+    if not cfg.AI_ENABLED or not cfg.GEMINI_API_KEY:
+        return
+    if time.time() - _last_regime_deep_ts < cfg.AI_REGIME_DEEP_INTERVAL_SEC:
+        return
+    # BTC 기준 룰 분류
+    btc_dfs = symbol_dfs.get("BTCUSDT")
+    if not btc_dfs:
+        return
+    df15, df1h, df4h = btc_dfs
+    rule = rgm.classify(df1h, df4h)
+    if not rule:
+        return
+    # 뉴스 sentiment (있으면)
+    news_sent = None
+    try:
+        from . import news as _news
+        news_sent = _news.get_news_sentiment("BTCUSDT")
+    except Exception:
+        pass
+    snap = ai.market_snapshot(df15, df1h, df4h)
+    deep = ai.regime_deep(rule_regime=rule, news_sentiment=news_sent, snapshot=snap)
+    _last_regime_deep_ts = time.time()
+    _last_regime_deep = deep
+    if deep and deep.get("regime") not in ("?", ""):
+        tg.send(
+            f"🌐 <b>레짐 deep 분석</b>\n"
+            f"규제: {deep.get('regime', '?')} (신뢰 {deep.get('confidence', 0)*100:.0f}%)\n"
+            f"요약: {deep.get('summary', '')}\n"
+            f"권장: {deep.get('suggested_action', '')}",
+            dedup_sec=10800,
+        )
 
 
 def _maybe_hourly_report(equity: float):
@@ -1037,6 +1114,8 @@ def main():
             # v6.34 A4: 매 시간 한 번 부진 심볼 휴식 체크
             if _loop_count % 120 == 1:
                 _maybe_rest_underperforming_symbols()
+            # v6.35 A3: 4시간 간격 레짐 deep
+            _maybe_run_regime_deep(symbol_dfs)
             _maybe_hourly_report(equity)
             _maybe_run_weekly_review()
 
