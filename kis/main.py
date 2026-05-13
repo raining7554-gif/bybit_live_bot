@@ -307,6 +307,149 @@ def sync_holdings_at_startup() -> tuple[dict, dict]:
 
 
 # ═══════════════════════════════════════════════════════
+# v6.36: Bybit Phase 1+2 KIS 포팅 — 인텔리전스 강화
+# ═══════════════════════════════════════════════════════
+_kis_symbol_rest_until: dict[str, float] = {}  # ticker → epoch ts (휴식 종료)
+
+
+def check_symbol_rest_kis(ticker: str) -> tuple[bool, str]:
+    """v6.36: KIS 부진 심볼 자동 휴식 체크."""
+    import time as _t
+    rest_until = _kis_symbol_rest_until.get(ticker, 0.0)
+    if _t.time() < rest_until:
+        remaining_hr = (rest_until - _t.time()) / 3600
+        return False, f"휴식중 ({remaining_hr:.1f}h 남음)"
+    return True, ""
+
+
+def maybe_rest_underperforming_kis(bot_ids: list = None):
+    """v6.36: 지난 N일 손실 누적 큰 KIS 심볼 자동 휴식.
+    매 시간 1회 호출.
+    """
+    if _journal is None:
+        return
+    import time as _t
+    try:
+        from config import (KIS_SYMBOL_REST_DAYS, KIS_SYMBOL_REST_LOSS_PCT,
+                            KIS_SYMBOL_REST_HOURS)
+    except ImportError:
+        return
+    if bot_ids is None:
+        bot_ids = [f"kis_kr_{DOM_STRATEGY_MODE}", f"kis_us_{OS_STRATEGY_MODE}"]
+    by_sym: dict[str, float] = {}
+    for bid in bot_ids:
+        try:
+            rows = _journal.recent_trades(
+                bot_id=bid,
+                since_seconds=KIS_SYMBOL_REST_DAYS * 86400,
+            )
+        except Exception:
+            continue
+        for r in rows:
+            sym = r.get("symbol", "")
+            # KIS 는 pnl_pct 가 의미있음 (가격 비례)
+            pnl_pct = float(r.get("pnl_pct", 0))
+            by_sym[sym] = by_sym.get(sym, 0) + pnl_pct
+    for sym, total_pct in by_sym.items():
+        # pnl_pct 는 fractional (0.05 = 5%). 임계치 5% = -0.05 * count?
+        # 단순화: 누적 -X% 합계 (절대값)
+        threshold = KIS_SYMBOL_REST_LOSS_PCT / 100.0  # 5% → 0.05
+        if total_pct <= -threshold:
+            cur_rest = _kis_symbol_rest_until.get(sym, 0)
+            if cur_rest < _t.time():
+                _kis_symbol_rest_until[sym] = _t.time() + KIS_SYMBOL_REST_HOURS * 3600
+                try:
+                    telegram.send_force(
+                        f"😴 [{sym}] 자동 휴식 — "
+                        f"지난 {KIS_SYMBOL_REST_DAYS}일 누적 {total_pct*100:+.2f}%\n"
+                        f"{KIS_SYMBOL_REST_HOURS}h 진입 차단"
+                    )
+                except Exception:
+                    pass
+
+
+def ai_entry_gate_kis(ticker: str, name: str, market: str,
+                     reason: str, price: float) -> dict:
+    """v6.36: KIS 진입 직전 AI 게이트.
+
+    Returns: {"approved": bool, "reason": str, "risk": "low/med/high"}
+    AI 비활성/quota 소진/오류 시 항상 approved=True.
+    """
+    if _agent is None:
+        return {"approved": True, "reason": "AI off", "risk": "?"}
+    try:
+        from config import KIS_AI_GATE_ENABLED
+        if not KIS_AI_GATE_ENABLED:
+            return {"approved": True, "reason": "disabled", "risk": "?"}
+        from intelligence import agent as _ag
+        if _ag._quota_state.get("exhausted"):
+            return {"approved": True, "reason": "quota out", "risk": "?"}
+    except Exception:
+        return {"approved": True, "reason": "AI err", "risk": "?"}
+
+    prompt = (
+        f"한국투자증권 자동 매수 직전 AI 게이트. JSON 만 응답.\n"
+        f"종목: {name} ({ticker}) — {market}\n"
+        f"현재가: {price}\n"
+        f"진입 사유: {reason}\n\n"
+        f"이 매수에 명확한 위험 (어닝 직전/소문/공매도 급증/큰 갭) 있나?\n"
+        f'JSON: {{"approved": true|false, "reason": "20자내", "risk": "low|medium|high"}}'
+    )
+    try:
+        from intelligence.agent import _call_gemini, _extract_json
+        text, err = _call_gemini(prompt, want_json=True, timeout=12)
+        if err or not text:
+            return {"approved": True, "reason": err or "no resp", "risk": "?"}
+        data = _extract_json(text) or {}
+        return {
+            "approved": bool(data.get("approved", True)),
+            "reason": str(data.get("reason", ""))[:60],
+            "risk": str(data.get("risk", "?")),
+        }
+    except Exception as e:
+        return {"approved": True, "reason": f"exc: {e}", "risk": "?"}
+
+
+def check_market_corr_kis(market: str) -> tuple[bool, str]:
+    """v6.36: KOSPI / QQQ 약세 → 해당 시장 진입 차단."""
+    try:
+        from config import KIS_CORR_GATE_ENABLED
+        if not KIS_CORR_GATE_ENABLED:
+            return True, ""
+    except ImportError:
+        return True, ""
+
+    try:
+        if market == "kr":
+            # KODEX 200 일봉 → 현재가 vs MA20
+            from strategy_clenow_kr import get_kr_daily, _sma
+            candles = get_kr_daily("069500", count=30, market_code="J")
+            if len(candles) < 25:
+                return True, ""
+            closes = [c["close"] for c in candles]
+            ma20 = _sma(closes, 20)
+            today = closes[0]
+            if ma20 > 0 and today < ma20 * 0.98:  # MA20 의 -2% 아래 = 약세
+                return False, f"KOSPI 약세 (KODEX200 {today} < MA20×0.98)"
+        elif market == "us":
+            # QQQ 일봉 → 현재가 vs MA20
+            from strategy_overseas import get_overseas_daily
+            from strategy_clenow_kr import _sma
+            candles = get_overseas_daily("QQQ", "NAS", count=30)
+            if len(candles) < 25:
+                return True, ""
+            closes = [c["close"] for c in candles]
+            ma20 = _sma(closes, 20)
+            today = closes[0]
+            if ma20 > 0 and today < ma20 * 0.98:
+                return False, f"QQQ 약세 ({today:.2f} < MA20×0.98)"
+    except Exception as e:
+        print(f"[KIS corr check {market}] err: {e}")
+        return True, ""
+    return True, ""
+
+
+# ═══════════════════════════════════════════════════════
 # 현황 요약
 # ═══════════════════════════════════════════════════════
 def send_summary(dom_pos, os_pos, trade_count):
@@ -1095,9 +1238,31 @@ def main():
                     except Exception as e:
                         print(f"[MAIN] 국내 스캔 오류: {e}")
                         cands = []
+                    # v6.36: KOSPI 상관 게이트 (약세시 KR 진입 전체 차단)
+                    ok_corr, corr_reason = check_market_corr_kis("kr")
+                    if not ok_corr:
+                        print(f"[MAIN] KR 상관 차단: {corr_reason}")
+                        cands = []
                     for c in cands:
                         if len(dom_pos) >= max_pos:
                             break
+                        # v6.36: 부진 심볼 휴식 체크
+                        ok_rest, _ = check_symbol_rest_kis(c["ticker"])
+                        if not ok_rest:
+                            continue
+                        # v6.36: AI 게이트
+                        gate = ai_entry_gate_kis(
+                            c["ticker"], c["name"], "KR",
+                            c.get("reason", ""),
+                            float(c.get("close", 0) or 0),
+                        )
+                        if not gate.get("approved", True):
+                            telegram.send(
+                                f"🚫 [{c['name']}] AI 게이트 거부\n"
+                                f"사유: {gate.get('reason', '')}",
+                                dedup_sec=300,
+                            )
+                            continue
                         res = trader.buy_market(
                             c["ticker"], c["name"],
                             reason=c.get("reason", f"[{DOM_STRATEGY_MODE}] 진입"),
@@ -1238,10 +1403,32 @@ def main():
                                 f"전 종목 진입조건 (정배열/RSI/거래량/패턴) 탈락",
                                 dedup_sec=1800,
                             )
+                        # v6.36: QQQ 상관 게이트 (약세시 US 진입 전체 차단)
+                        ok_corr_us, corr_us_reason = check_market_corr_kis("us")
+                        if not ok_corr_us:
+                            print(f"[MAIN] US 상관 차단: {corr_us_reason}")
+                            cands = []
                         bought_count = 0
                         for c in cands:
                             if len(os_pos) >= OS_MAX_POSITIONS:
                                 break
+                            # v6.36: 부진 심볼 휴식 체크
+                            ok_rest_us, _ = check_symbol_rest_kis(c["ticker"])
+                            if not ok_rest_us:
+                                continue
+                            # v6.36: AI 게이트
+                            gate_us = ai_entry_gate_kis(
+                                c["ticker"], c["name"], "US",
+                                c["reason"],
+                                float(c.get("price", 0) or 0),
+                            )
+                            if not gate_us.get("approved", True):
+                                telegram.send(
+                                    f"🚫 [{c['name']}] AI 게이트 거부\n"
+                                    f"사유: {gate_us.get('reason', '')}",
+                                    dedup_sec=300,
+                                )
+                                continue
                             res = trader_overseas.buy_overseas(
                                 c["ticker"], c["name"], c["exchange"],
                                 reason=f"[{c.get('regime','')}] {c['reason']}",
@@ -1282,6 +1469,11 @@ def main():
                 and (is_dom_market_hours() or is_os_market_hours())):
             send_summary(dom_pos, os_pos, trade_count)
             last_summary_kst_hour = now.hour
+            # v6.36: 정각 1회 부진 심볼 휴식 체크
+            try:
+                maybe_rest_underperforming_kis()
+            except Exception as e:
+                print(f"[MAIN] rest underperformers err: {e}")
 
         # ════ v5.0: 09:00 KST KR 시장 뉴스 sentiment (일 1회) ═════════════════
         today_str = now.strftime("%Y-%m-%d")

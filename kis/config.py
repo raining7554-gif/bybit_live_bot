@@ -224,6 +224,19 @@ PARTIAL_TP_LEVELS = [
 
 # 일일 누적 손실 한도 (총평가 대비) — 초과 시 당일 신규 진입 중단
 DAILY_LOSS_CIRCUIT = 0.05      # -5% (국내 단독)
+
+# v6.36: Bybit Phase 1+2 KIS 포팅 — 인텔리전스 강화
+
+# 부진 심볼 자동 휴식 (KR + US 둘 다 적용)
+KIS_SYMBOL_REST_DAYS = int(os.environ.get("KIS_SYMBOL_REST_DAYS", "14"))           # 14일 평가
+KIS_SYMBOL_REST_LOSS_PCT = float(os.environ.get("KIS_SYMBOL_REST_LOSS_PCT", "5.0"))  # 누적 -5% (현금가)
+KIS_SYMBOL_REST_HOURS = int(os.environ.get("KIS_SYMBOL_REST_HOURS", "48"))         # 48h 휴식
+
+# AI 진입 게이트 (Clenow KR + Swing US)
+KIS_AI_GATE_ENABLED = os.environ.get("KIS_AI_GATE_ENABLED", "true").lower() == "true"
+
+# 상관 게이트 — KOSPI 약세시 KR 진입 차단, QQQ 약세시 US 진입 차단
+KIS_CORR_GATE_ENABLED = os.environ.get("KIS_CORR_GATE_ENABLED", "true").lower() == "true"
 # v4.0: 통합 서킷 — 국내+해외 합계 잔고 기준 일일 손실 한도
 TOTAL_DAILY_LOSS_CIRCUIT = 0.07  # -7% 합계 손실시 양쪽 다 정지
 
