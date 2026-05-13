@@ -84,10 +84,29 @@ TP_MARGIN_BASE    = 0.06   # base:  +6% margin → close (was +10%)
 TP1_MARGIN_MID    = 0.10   # mid:   TP1 +10% partial 50% → BE+trail rest
 TP_MARGIN_HIGH    = None   # high:  no fixed TP — BE+trail only
 
+# v6.32: 2단계 분할 익절 + Dynamic trail (mid/high tier)
+# 사용자 케이스: BNB +$100 정점 → 풀백 → 트레일 발동 못함 → 수익 토함
+# 해결: 일찍 일부 잠금 + 수익 클수록 trail 조여짐
+# Mid tier 2단계 (current TP1 +10% 50% → 30/30/40 분할)
+TP1_RATIO_MID     = 0.30   # mid TP1 (+10% margin) 30% 청산
+TP2_MARGIN_MID    = 0.20   # mid TP2 (+20% margin)
+TP2_RATIO_MID     = 0.30   # mid TP2 30% 청산 (누적 60%)
+# High tier 2단계 분할 익절 신규
+TP1_MARGIN_HIGH   = 0.05   # high TP1 +5% margin → 30% 청산
+TP1_RATIO_HIGH    = 0.30
+TP2_MARGIN_HIGH   = 0.15   # high TP2 +15% margin → 30% 청산 (누적 60%)
+TP2_RATIO_HIGH    = 0.30
+# Dynamic trail — 수익 클수록 trail 조여짐 (high tier 만)
+DYNAMIC_TRAIL_ENABLED   = True
+TRAIL_PEAK_TIGHT_PCT    = 0.10   # peak margin ≥ +10% 시 1.5×ATR 로 조임
+TRAIL_PEAK_VTIGHT_PCT   = 0.20   # peak margin ≥ +20% 시 1.0×ATR 로 더 조임
+TRAIL_ATR_HIGH_TIGHT    = 1.5
+TRAIL_ATR_HIGH_VTIGHT   = 1.0
+
 # Per-tier ATR trail multiplier (v10.2: widened — let trends run further;
 # previously mid=2.5 / high=3.0 cashed out on normal pullbacks)
 TRAIL_ATR_DEFAULT = 1.5
-TRAIL_ATR_MID     = 3.0
+TRAIL_ATR_MID     = 2.0   # v6.32: 3.0 → 2.0 (mid 도 좀 더 빠르게)
 TRAIL_ATR_HIGH    = 4.0
 
 # ─── Stop / trail ──────────────────────────────────────────────

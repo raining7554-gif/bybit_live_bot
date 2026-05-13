@@ -211,10 +211,12 @@ def evaluate_position_management(pos: dict, atr_15m: float, current_price: float
                                  last_high: float, last_low: float) -> Optional[dict]:
     """v8 tier-aware exit logic.
 
+    v6.32: mid/high tier 2단계 분할 익절 + dynamic trail.
+
     Returns one of:
       None                                  → no action
       {"action": "close", "reason": "tp"}   → fixed TP hit (micro/probe/base)
-      {"action": "scale_out", "ratio": 0.5} → mid tier TP1 partial
+      {"action": "scale_out", "ratio": x, "step": N} → 단계별 부분 청산
       {"action": "modify_stop", "stop": x}  → BE move or trail update
     """
     side = pos["side"]
@@ -235,29 +237,67 @@ def evaluate_position_management(pos: dict, atr_15m: float, current_price: float
         price_chg = (entry - current_price) / entry
     margin_pct = price_chg * leverage
 
+    # v6.32: peak margin 추적 (dynamic trail 용)
+    peak = pos.get("peak_margin_pct", 0.0)
+    if margin_pct > peak:
+        pos["peak_margin_pct"] = margin_pct
+        peak = margin_pct
+
     # ---- Fixed-TP tiers: full close at target ----
     if tier in ("micro", "probe", "base") and tp_margin is not None:
         if margin_pct >= tp_margin:
             return {"action": "close", "reason": "fixed_tp"}
         return None
 
-    # ---- Mid tier: TP1 partial 50% then BE+trail rest ----
+    # ---- Mid tier: 2단계 분할 익절 (v6.32) ----
     if tier == "mid":
-        if not pos.get("scale_done") and tp_margin is not None and margin_pct >= tp_margin:
-            return {"action": "scale_out", "ratio": 0.5}
-        if pos.get("scale_done"):
+        step = pos.get("scale_step", 0)
+        # TP1 +10% margin
+        if step < 1 and margin_pct >= cfg.TP1_MARGIN_MID:
+            return {"action": "scale_out", "ratio": cfg.TP1_RATIO_MID, "step": 1,
+                    "reason": f"mid_TP1 (+{cfg.TP1_MARGIN_MID*100:.0f}%)"}
+        # TP2 +20% margin
+        if step < 2 and margin_pct >= cfg.TP2_MARGIN_MID:
+            # remaining = 0.70 after TP1, TP2 close 30% of original = 30/70 = 0.4286 of current
+            rem_ratio = cfg.TP2_RATIO_MID / max(0.01, 1 - cfg.TP1_RATIO_MID)
+            return {"action": "scale_out", "ratio": rem_ratio, "step": 2,
+                    "reason": f"mid_TP2 (+{cfg.TP2_MARGIN_MID*100:.0f}%)"}
+        # 둘 다 끝나면 BE + trail
+        if step >= 1:
             trail_mult = _trail_mult_for_tier(tier)
             return _be_then_trail(pos, side, entry, cur_stop, R, atr_15m,
                                   last_high, last_low, trail_mult)
         return None
 
-    # ---- High tier: BE @ +1R then chandelier (no fixed TP) ----
+    # ---- High tier: 2단계 분할 익절 + dynamic trail (v6.32) ----
     if tier == "high":
-        trail_mult = _trail_mult_for_tier(tier)
+        step = pos.get("scale_step", 0)
+        # TP1 +5% margin → 30% 청산
+        if step < 1 and margin_pct >= cfg.TP1_MARGIN_HIGH:
+            return {"action": "scale_out", "ratio": cfg.TP1_RATIO_HIGH, "step": 1,
+                    "reason": f"high_TP1 (+{cfg.TP1_MARGIN_HIGH*100:.0f}%)"}
+        # TP2 +15% margin → 30% 추가 청산
+        if step < 2 and margin_pct >= cfg.TP2_MARGIN_HIGH:
+            rem_ratio = cfg.TP2_RATIO_HIGH / max(0.01, 1 - cfg.TP1_RATIO_HIGH)
+            return {"action": "scale_out", "ratio": rem_ratio, "step": 2,
+                    "reason": f"high_TP2 (+{cfg.TP2_MARGIN_HIGH*100:.0f}%)"}
+        # 분할 시작했으면 BE + dynamic trail, 아직 안 했으면 +1R 후 trail
+        trail_mult = _high_trail_mult_dynamic(peak)
         return _be_then_trail(pos, side, entry, cur_stop, R, atr_15m,
                               last_high, last_low, trail_mult)
 
     return None
+
+
+def _high_trail_mult_dynamic(peak_margin_pct: float) -> float:
+    """v6.32: peak margin 이 클수록 trail 조여짐."""
+    if not cfg.DYNAMIC_TRAIL_ENABLED:
+        return cfg.TRAIL_ATR_HIGH
+    if peak_margin_pct >= cfg.TRAIL_PEAK_VTIGHT_PCT:
+        return cfg.TRAIL_ATR_HIGH_VTIGHT
+    if peak_margin_pct >= cfg.TRAIL_PEAK_TIGHT_PCT:
+        return cfg.TRAIL_ATR_HIGH_TIGHT
+    return cfg.TRAIL_ATR_HIGH
 
 
 def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low,

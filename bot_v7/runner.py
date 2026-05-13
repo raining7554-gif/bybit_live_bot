@@ -296,7 +296,9 @@ def _try_open(symbol: str, equity: float, signal: dict,
         "side": side, "entry": entry_price, "size": qty,
         "leverage": lev, "score": score,
         "init_stop": signal["stop_price"], "current_stop": final_stop,
-        "be_done": False, "scale_done": False, "atr_15m": signal["atr_15m"],
+        "be_done": False, "scale_done": False, "scale_step": 0,
+        "peak_margin_pct": 0.0,
+        "atr_15m": signal["atr_15m"],
         "tp_price": signal.get("tp_price"),
         "tier": signal.get("tier", "high"),
         "tp_margin": signal.get("tp_margin"),
@@ -359,15 +361,18 @@ def _manage(symbol: str, df_15m: pd.DataFrame):
 
     if act == "scale_out":
         ratio = float(decision.get("ratio", 0.5))
+        step = int(decision.get("step", 1))
+        reason_tag = decision.get("reason", f"TP{step}")
         partial_qty = pos["size"] * ratio
         if ex.partial_close_market(symbol, pos["side"], partial_qty):
             pos["size"] -= partial_qty
-            pos["scale_done"] = True
+            pos["scale_step"] = step
+            pos["scale_done"] = True  # 레거시 호환 (be_then_trail 이 이걸 참조)
             st.save_all(_positions)
             new_eq = ex.get_balance()
             today_d, _ = _today_pnl(new_eq)
             tg.send(
-                f"🟦 [{_short(symbol)}] TP1 부분익절 50%\n"
+                f"🟦 [{_short(symbol)}] {reason_tag} 부분익절 {ratio*100:.0f}%\n"
                 f"잔고: ${new_eq:,.2f} (오늘 ${today_d:+.2f})"
             )
         return
