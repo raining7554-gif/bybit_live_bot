@@ -206,12 +206,50 @@ def _try_open(symbol: str, equity: float, signal: dict,
               snapshot: dict | None = None):
     if symbol in _positions:
         return  # already have a position on this symbol
+
+    # v6.33A: 시간대 자동 차단 (KST 시간)
+    cur_kst_hour = datetime.now(KST).hour
+    if cur_kst_hour in cfg.BLOCKED_HOURS_KST_SET:
+        # 한 번만 알림 (같은 시간대에 반복 알림 방지 — symbol+hour dedup)
+        return  # 조용히 skip (시간대 차단은 정상 동작)
+
+    # v6.33C: 자동 회복 휴식 — 일일 손실 -3% 도달시 진입 차단
+    today_d, today_pct = _today_pnl(equity)
+    if today_pct <= -cfg.DAILY_LOSS_REST_PCT:
+        # 첫 발견 시 1회만 알림 (loop_count dedup 효과)
+        if _loop_count % 30 == 1:
+            tg.send(
+                f"🛌 자동 휴식 발동 (오늘 ${today_d:+.2f} / {today_pct*100:+.2f}%)\n"
+                f"-{cfg.DAILY_LOSS_REST_PCT*100:.0f}% 도달 — 다음 KST 자정까지 진입 차단"
+            )
+        return
+
     side = signal["side"]
     lev = signal["leverage"]
     is_mr = bool(signal.get("mr"))
     entry_price = ex.get_price(symbol)
     if entry_price <= 0:
         return
+
+    # v6.33B: AI Final Gate (base 이상 tier 만 — 작은 진입은 통과)
+    if (cfg.AI_FINAL_GATE_ENABLED and not is_mr
+            and signal.get("tier") in ("base", "mid", "high")):
+        try:
+            gate = ai.gate_check(symbol, signal, snapshot)
+            if not gate.get("approved", True):
+                tg.send(
+                    f"🚫 [{_short(symbol)}] AI 게이트 거부 (위험 {gate.get('risk', '?')})\n"
+                    f"사유: {gate.get('reason', '')}"
+                )
+                return
+            # 위험 high 면 통과해도 알림 (수동 확인 가능)
+            if gate.get("risk") == "high":
+                tg.send(
+                    f"⚠️ [{_short(symbol)}] AI 게이트 위험 high (통과)\n"
+                    f"사유: {gate.get('reason', '')}"
+                )
+        except Exception as e:
+            print(f"[AI gate {symbol}] err: {e}", flush=True)
 
     if not ex.set_leverage(symbol, lev):
         tg.send(f"⚠️ [{_short(symbol)}] 레버리지 설정 실패 → 진입 보류")

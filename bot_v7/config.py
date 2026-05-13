@@ -146,6 +146,29 @@ QTY_DECIMALS = {
 # Disaster SL placed server-side at -2% (catches even if bot crashes)
 DISASTER_SL_PCT = 0.02
 
+# v6.33A: 시간대 자동 차단 (KST 시간) — /diagnose 데이터 기반
+# 06~12 KST 시간대가 -$87 (최대 손실 구간) → 해당 시간 진입 차단
+# CSV 형식 (예: "6,7,8,9,10,11"). 빈 문자열이면 차단 없음.
+BLOCKED_HOURS_KST = os.environ.get("BLOCKED_HOURS_KST", "6,7,8,9,10,11")
+
+def _parse_blocked_hours() -> set:
+    s = BLOCKED_HOURS_KST.strip()
+    if not s:
+        return set()
+    try:
+        return {int(h) for h in s.split(",") if h.strip()}
+    except Exception:
+        return set()
+
+BLOCKED_HOURS_KST_SET = _parse_blocked_hours()
+
+# v6.33C: 자동 회복 휴식 — 일일 손실 도달시 다음날까지 진입 차단
+DAILY_LOSS_REST_PCT = float(os.environ.get("DAILY_LOSS_REST_PCT", "0.03"))   # -3%
+
+# v6.33B: AI Final Gate — 진입 직전 Gemini 한 번 더 호출
+AI_FINAL_GATE_ENABLED = os.environ.get("AI_FINAL_GATE_ENABLED", "true").lower() == "true"
+AI_FINAL_GATE_MIN_TIER = os.environ.get("AI_FINAL_GATE_MIN_TIER", "base")  # base 이상만 (작은 진입은 통과)
+
 # Refresh OHLCV cache every N seconds within a loop iteration (avoid spam)
 CACHE_15M_SEC = 30
 CACHE_1H_SEC  = 600
