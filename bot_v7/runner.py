@@ -201,9 +201,92 @@ def _close_current(symbol: str, reason: str, fill_price: float,
     )
 
 
+# v6.34 B5/B6/A4: 룰베이스 인텔리전스 헬퍼
+_symbol_rest_until: dict[str, float] = {}  # symbol → epoch ts (휴식 종료)
+
+
+def _check_correlation_block(symbol: str, side: str,
+                             symbol_trends: dict[str, str]) -> tuple[bool, str]:
+    """v6.34 B5: BTC 추세 반대 알트 진입 차단.
+
+    BTC 가 명확한 방향 (up/down) 이고 알트가 그 반대로 진입하려 하면 차단.
+    BTC 자체는 항상 통과.
+    """
+    if not cfg.CORRELATION_DETECTOR_ENABLED or symbol == "BTCUSDT":
+        return True, ""
+    btc_trend = symbol_trends.get("BTCUSDT", "flat")
+    if btc_trend == "flat":
+        return True, ""
+    # BTC up + 알트 short → 반대 방향
+    if btc_trend == "up" and side == "Sell":
+        return False, f"BTC up 인데 {symbol} short — 추세 거스름"
+    if btc_trend == "down" and side == "Buy":
+        return False, f"BTC down 인데 {symbol} long — 추세 거스름"
+    return True, ""
+
+
+def _check_concentration(side: str) -> tuple[bool, str]:
+    """v6.34 B6: 같은 방향 포지션 너무 많으면 차단."""
+    same_dir_count = sum(
+        1 for p in _positions.values() if p.get("side") == side
+    )
+    if same_dir_count >= cfg.MAX_SAME_DIRECTION_POSITIONS:
+        return False, (
+            f"동일 방향 ({side}) {same_dir_count}종 보유 — "
+            f"집중 위험 (한도 {cfg.MAX_SAME_DIRECTION_POSITIONS}종)"
+        )
+    return True, ""
+
+
+def _check_symbol_rest(symbol: str) -> tuple[bool, str]:
+    """v6.34 A4: 부진 심볼 자동 휴식 체크.
+
+    심볼이 휴식 중이면 차단.
+    """
+    rest_until = _symbol_rest_until.get(symbol, 0.0)
+    if time.time() < rest_until:
+        remaining_hr = (rest_until - time.time()) / 3600
+        return False, f"휴식중 ({remaining_hr:.1f}h 남음)"
+    return True, ""
+
+
+def _maybe_rest_underperforming_symbols():
+    """v6.34 A4: 지난 N일 손실 누적 큰 심볼 자동 휴식.
+    매 시간 1회 호출 (heartbeat 옆).
+    """
+    try:
+        from intelligence import journal as _ij
+    except Exception:
+        return
+    try:
+        rows = _ij.recent_trades(
+            bot_id=ai.BOT_ID,
+            since_seconds=cfg.SYMBOL_REST_DAYS * 86400,
+        )
+    except Exception:
+        return
+    by_sym: dict[str, float] = {}
+    for r in rows:
+        sym = r.get("symbol", "")
+        pnl = float(r.get("pnl", 0))
+        by_sym[sym] = by_sym.get(sym, 0) + pnl
+    for sym, total_pnl in by_sym.items():
+        if total_pnl <= -cfg.SYMBOL_REST_LOSS_THRESHOLD:
+            cur_rest = _symbol_rest_until.get(sym, 0)
+            new_rest = time.time() + cfg.SYMBOL_REST_HOURS * 3600
+            if cur_rest < time.time():  # 새 휴식 시작
+                _symbol_rest_until[sym] = new_rest
+                tg.send(
+                    f"😴 [{_short(sym)}] 자동 휴식 — "
+                    f"지난 {cfg.SYMBOL_REST_DAYS}일 누적 ${total_pnl:+.2f}\n"
+                    f"{cfg.SYMBOL_REST_HOURS}h 진입 차단 (다른 심볼은 정상)"
+                )
+
+
 # ── 진입 ───────────────────────────────────────────────────────
 def _try_open(symbol: str, equity: float, signal: dict,
-              snapshot: dict | None = None):
+              snapshot: dict | None = None,
+              symbol_trends: dict | None = None):
     if symbol in _positions:
         return  # already have a position on this symbol
 
@@ -225,6 +308,27 @@ def _try_open(symbol: str, equity: float, signal: dict,
         return
 
     side = signal["side"]
+
+    # v6.34 A4: 부진 심볼 자동 휴식 체크
+    ok_rest, reason_rest = _check_symbol_rest(symbol)
+    if not ok_rest:
+        return  # 알림 X (휴식 중은 정상 동작)
+
+    # v6.34 B6: 같은 방향 집중 차단
+    ok_conc, reason_conc = _check_concentration(side)
+    if not ok_conc:
+        if _loop_count % 30 == 1:  # dedup
+            tg.send(f"⏸️ [{_short(symbol)}] 집중 차단 — {reason_conc}")
+        return
+
+    # v6.34 B5: BTC 추세 반대 알트 차단
+    if symbol_trends:
+        ok_corr, reason_corr = _check_correlation_block(symbol, side, symbol_trends)
+        if not ok_corr:
+            if _loop_count % 30 == 1:
+                tg.send(f"⏸️ [{_short(symbol)}] 상관 차단 — {reason_corr}")
+            return
+
     lev = signal["leverage"]
     is_mr = bool(signal.get("mr"))
     entry_price = ex.get_price(symbol)
@@ -921,7 +1025,8 @@ def main():
                                 sig = strat.evaluate_mr_entry(df15, df4h)
 
                             if sig:
-                                _try_open(symbol, equity, sig, snap)
+                                _try_open(symbol, equity, sig, snap,
+                                          symbol_trends=symbol_trends)
 
                     _maybe_run_regime(symbol, df15, df1h, df4h)
                 except Exception as sym_e:
@@ -929,6 +1034,9 @@ def main():
 
             if _loop_count % 10 == 1:
                 _heartbeat(equity)
+            # v6.34 A4: 매 시간 한 번 부진 심볼 휴식 체크
+            if _loop_count % 120 == 1:
+                _maybe_rest_underperforming_symbols()
             _maybe_hourly_report(equity)
             _maybe_run_weekly_review()
 
