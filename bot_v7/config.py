@@ -183,6 +183,14 @@ SYMBOL_REST_DAYS = int(os.environ.get("SYMBOL_REST_DAYS", "7"))           # 평�
 SYMBOL_REST_LOSS_THRESHOLD = float(os.environ.get("SYMBOL_REST_LOSS_THRESHOLD", "10.0"))  # -$10 누적
 SYMBOL_REST_HOURS = int(os.environ.get("SYMBOL_REST_HOURS", "24"))        # 휴식 시간
 
+# v6.35 A1b: AI Hold Check — 보유중 포지션 조기 청산 평가
+AI_HOLD_CHECK_ENABLED = os.environ.get("AI_HOLD_CHECK_ENABLED", "true").lower() == "true"
+AI_HOLD_CHECK_MIN_PROFIT = float(os.environ.get("AI_HOLD_CHECK_MIN_PROFIT", "0.05"))  # peak +5% margin 이상에서만
+
+# v6.35 A3: 레짐 deep analysis — 룰 + 뉴스 + AI 통합
+AI_REGIME_DEEP_ENABLED = os.environ.get("AI_REGIME_DEEP_ENABLED", "true").lower() == "true"
+AI_REGIME_DEEP_INTERVAL_SEC = int(os.environ.get("AI_REGIME_DEEP_INTERVAL_SEC", "14400"))  # 4시간 간격
+
 # Refresh OHLCV cache every N seconds within a loop iteration (avoid spam)
 CACHE_15M_SEC = 30
 CACHE_1H_SEC  = 600

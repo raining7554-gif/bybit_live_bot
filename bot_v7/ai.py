@@ -107,6 +107,132 @@ def analyze_trade_async(trade: dict, snapshot: Optional[dict] = None):
     )
 
 
+def hold_check(symbol: str, pos: dict, current_price: float,
+               snapshot: dict | None = None) -> dict:
+    """v6.35 A1b: 보유중 포지션 유지 vs 조기 청산 AI 평가.
+
+    Returns: {
+      "action": "hold" | "exit" | "tighten",
+      "reason": str,
+      "confidence": 0.0-1.0,
+    }
+    AI 비활성/quota 소진/오류시 항상 hold (개입 X).
+    """
+    try:
+        if not _agent or not _agent._enabled():
+            return {"action": "hold", "reason": "AI off", "confidence": 0.0}
+        from intelligence import agent as _ag
+        if _ag._quota_state.get("exhausted"):
+            return {"action": "hold", "reason": "quota exhausted", "confidence": 0.0}
+    except Exception:
+        return {"action": "hold", "reason": "AI err", "confidence": 0.0}
+
+    side = pos.get("side", "?")
+    entry = pos.get("entry", 0)
+    leverage = pos.get("leverage", 1)
+    tier = pos.get("tier", "?")
+    score = pos.get("score", 0)
+    if entry <= 0:
+        return {"action": "hold", "reason": "no entry", "confidence": 0.0}
+    price_chg_pct = ((current_price - entry) / entry) if side == "Buy" \
+                    else ((entry - current_price) / entry)
+    margin_pct = price_chg_pct * leverage
+    snap_str = ""
+    if snapshot:
+        snap_str = (
+            f"\n현재 RSI {snapshot.get('rsi', '?')}, "
+            f"BB pos {snapshot.get('bb_pos', '?')}, "
+            f"ADX {snapshot.get('adx', '?')}"
+        )
+
+    prompt = (
+        f"보유 포지션 hold/exit AI 결정. JSON 만 응답.\n"
+        f"심볼: {symbol} {side} (tier {tier}, score {score})\n"
+        f"진입가 {entry}, 현재가 {current_price}\n"
+        f"가격 변동 {price_chg_pct*100:+.2f}%, 마진 변동 {margin_pct*100:+.1f}%"
+        f"{snap_str}\n\n"
+        f"이 포지션 유지가 합리적인가? "
+        f"고점 도달 후 풀백, 추세 반전 신호, 큰 뉴스 등 위험 요소가 있나?\n"
+        f'JSON: {{"action": "hold|exit|tighten", "reason": "20자내", "confidence": 0.0~1.0}}\n'
+        f"  - hold: 유지\n"
+        f"  - exit: 즉시 청산 (큰 위험 감지)\n"
+        f"  - tighten: trail 강화 권장 (수익 보호)"
+    )
+    try:
+        from intelligence.agent import _call_gemini, _extract_json
+        text, err = _call_gemini(prompt, want_json=True, timeout=15)
+        if err or not text:
+            return {"action": "hold", "reason": err or "no resp", "confidence": 0.0}
+        data = _extract_json(text) or {}
+        return {
+            "action": str(data.get("action", "hold")),
+            "reason": str(data.get("reason", ""))[:60],
+            "confidence": float(data.get("confidence", 0.5)),
+        }
+    except Exception as e:
+        return {"action": "hold", "reason": f"exc: {e}", "confidence": 0.0}
+
+
+def regime_deep(rule_regime: dict | None = None,
+                news_sentiment: float | None = None,
+                snapshot: dict | None = None) -> dict:
+    """v6.35 A3: 레짐 종합 분석 — 룰 분류기 + 뉴스 + AI.
+
+    Returns: {
+      "regime": "trending_bull" | "trending_bear" | "ranging" | "transition",
+      "summary": str,
+      "suggested_action": str,
+      "confidence": 0.0-1.0,
+    }
+    """
+    try:
+        if not _agent or not _agent._enabled():
+            return {"regime": "?", "summary": "AI off", "suggested_action": "?", "confidence": 0.0}
+        from intelligence import agent as _ag
+        if _ag._quota_state.get("exhausted"):
+            return {"regime": "?", "summary": "quota exhausted", "suggested_action": "?", "confidence": 0.0}
+    except Exception:
+        return {"regime": "?", "summary": "AI err", "suggested_action": "?", "confidence": 0.0}
+
+    rule_str = ""
+    if rule_regime:
+        rule_str = (
+            f"룰 분류기: {rule_regime.get('regime', '?')} "
+            f"(신뢰 {rule_regime.get('confidence', 0)*100:.0f}%) "
+            f"ADX 4H={rule_regime.get('adx_4h', '?')} 1H={rule_regime.get('adx_1h', '?')}"
+        )
+    news_str = ""
+    if news_sentiment is not None:
+        news_str = f"뉴스 sentiment: {news_sentiment:+.2f}"
+    snap_str = ""
+    if snapshot:
+        snap_str = f"현재가 {snapshot.get('price', '?')} RSI {snapshot.get('rsi', '?')}"
+
+    prompt = (
+        f"암호화폐 시장 레짐 종합 분석. JSON 만 응답.\n"
+        f"{rule_str}\n{news_str}\n{snap_str}\n\n"
+        f"위 정보 종합해서 현재 시장 레짐 + 권장 행동 평가.\n"
+        f'JSON: {{"regime": "trending_bull|trending_bear|ranging|transition",\n'
+        f'        "summary": "한국어 1줄 (40자내)",\n'
+        f'        "suggested_action": "한국어 1줄 (50자내)",\n'
+        f'        "confidence": 0.0~1.0}}'
+    )
+    try:
+        from intelligence.agent import _call_gemini, _extract_json
+        text, err = _call_gemini(prompt, want_json=True, timeout=20)
+        if err or not text:
+            return {"regime": "?", "summary": err or "no resp", "suggested_action": "?", "confidence": 0.0}
+        data = _extract_json(text) or {}
+        return {
+            "regime": str(data.get("regime", "?")),
+            "summary": str(data.get("summary", ""))[:80],
+            "suggested_action": str(data.get("suggested_action", ""))[:100],
+            "confidence": float(data.get("confidence", 0.5)),
+        }
+    except Exception as e:
+        return {"regime": "?", "summary": f"exc: {e}", "suggested_action": "?", "confidence": 0.0}
+
+
 def gate_check(symbol: str, signal: dict, snapshot: dict | None = None) -> dict:
     """v6.33B: 진입 직전 AI final gate. (실시간, 동기, 빠른 평가).
 
