@@ -6,11 +6,13 @@ on:
     - cron: "0 0 * * 1"
   workflow_dispatch:        # 수동 실행 가능
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   sweep:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write       # 결과 JSON 커밋용
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,6 +52,114 @@ jobs:
             git push origin main
           fi
 
+      # v6.37 Phase 3.1: top 1 결과를 적용한 config 변경 PR 자동 생성
+      - name: Generate config proposal PR
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from datetime import datetime
+          try:
+              with open("backtest/reports/sweep_mr_v5_BTC.json") as f:
+                  d = json.load(f)
+          except Exception as e:
+              print(f"no sweep result: {e}")
+              raise SystemExit(0)
+          top = d.get("top10", [])
+          if not top:
+              raise SystemExit(0)
+          best = top[0]
+          if "error" in best:
+              raise SystemExit(0)
+          p = best.get("params", {})
+          cur = d.get("current", {})
+          # 차이 비교 — 최소 1 항목 차이날 때만 PR
+          diff_items = []
+          for k in ("score_min", "rsi_oversold", "bb_low", "vol_spike"):
+              if k in p and k in cur and p[k] != cur[k]:
+                  diff_items.append((k, cur[k], p[k]))
+          if not diff_items:
+              print("no param change")
+              raise SystemExit(0)
+
+          # config 파일에서 해당 값 수정
+          target_file = "backtest/strategies/strategy_mr_v5.py"
+          with open(target_file) as f:
+              content = f.read()
+
+          import re
+          new_content = content
+          mapping = {
+              "score_min":    ("SCORE_MIN", float),
+              "rsi_oversold": ("RSI_OVERSOLD", float),
+              "bb_low":       ("BB_POS_LOW", float),
+              "vol_spike":    ("VOL_SPIKE_MIN", float),
+          }
+          for k, _, new_v in diff_items:
+              const_name, _ = mapping[k]
+              # const = ... 행 교체
+              pat = re.compile(rf"^{const_name}\s*=\s*[\d.]+", re.MULTILINE)
+              new_content = pat.sub(f"{const_name} = {new_v}", new_content)
+              # 미러 항목 (RSI/BB 반대편)
+              if k == "rsi_oversold":
+                  new_content = re.sub(r"^RSI_OVERBOUGHT\s*=\s*[\d.]+",
+                                       f"RSI_OVERBOUGHT = {100.0 - new_v}",
+                                       new_content, flags=re.MULTILINE)
+              if k == "bb_low":
+                  new_content = re.sub(r"^BB_POS_HIGH\s*=\s*[\d.]+",
+                                       f"BB_POS_HIGH = {round(1.0 - new_v, 2)}",
+                                       new_content, flags=re.MULTILINE)
+          with open(target_file, "w") as f:
+              f.write(new_content)
+
+          # 새 브랜치 + PR
+          branch = f"sweep/auto-tune-{datetime.utcnow().strftime('%Y%m%d')}"
+          subprocess.run(["git", "checkout", "-B", branch], check=True)
+          subprocess.run(["git", "add", target_file], check=True)
+          subprocess.run(["git", "commit", "-m",
+                          f"auto: sweep tune {datetime.utcnow().strftime('%Y-%m-%d')}"],
+                         check=True)
+          subprocess.run(["git", "push", "-u", "origin", branch], check=True)
+
+          body_lines = ["## 주간 sweep 자동 튜닝 제안", ""]
+          body_lines.append(f"- 백테스트: BTC 180d, sharpe={best.get('sharpe')}, ret={best.get('total_pct')}%, wr={best.get('win_rate')}%")
+          body_lines.append("")
+          body_lines.append("### 파라미터 변경")
+          body_lines.append("| 항목 | 현재 | 제안 |")
+          body_lines.append("|---|---|---|")
+          for k, old_v, new_v in diff_items:
+              body_lines.append(f"| {k} | {old_v} | {new_v} |")
+          body_lines.append("")
+          body_lines.append("머지 전 라이브 검증 필요 — paper 모드 / 작은 사이즈 권장")
+          body = "\n".join(body_lines)
+
+          import urllib.request, json as _j
+          token = os.environ.get("GITHUB_TOKEN", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          if not token or not repo:
+              print("no PR creation — token/repo missing")
+              raise SystemExit(0)
+          url = f"https://api.github.com/repos/{repo}/pulls"
+          req_body = _j.dumps({
+              "title": f"auto: sweep tune {datetime.utcnow().strftime('%Y-%m-%d')}",
+              "head": branch,
+              "base": "main",
+              "body": body,
+          }).encode()
+          req = urllib.request.Request(url, data=req_body, headers={
+              "Authorization": f"token {token}",
+              "Accept": "application/vnd.github+json",
+              "Content-Type": "application/json",
+          })
+          try:
+              with urllib.request.urlopen(req) as r:
+                  print("PR created:", r.status)
+          except Exception as e:
+              print(f"PR create err: {e}")
+          PY
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
       - name: Telegram notify (optional)
         if: env.TG_TOKEN != '' && env.TG_CHAT_ID != ''
         env:
@@ -80,7 +190,7 @@ jobs:
                   f"   score>={p['score_min']} rsi={p['rsi_oversold']} "
                   f"bb={p['bb_low']} vol={p['vol_spike']}"
               )
-          lines.append("\n현재 운영값과 비교 후 수동 적용 결정")
+          lines.append("\nconfig 변경 제안 PR 자동 생성됨 — 검토 후 머지")
           msg = "\n".join(lines)
           requests.post(
               f"https://api.telegram.org/bot{token}/sendMessage",
