@@ -169,6 +169,20 @@ DAILY_LOSS_REST_PCT = float(os.environ.get("DAILY_LOSS_REST_PCT", "0.03"))   # -
 AI_FINAL_GATE_ENABLED = os.environ.get("AI_FINAL_GATE_ENABLED", "true").lower() == "true"
 AI_FINAL_GATE_MIN_TIER = os.environ.get("AI_FINAL_GATE_MIN_TIER", "base")  # base 이상만 (작은 진입은 통과)
 
+# v6.34 B5: 상관관계 디텍터 — BTC 큰 움직임시 알트도 따라감 가정
+# BTC 가 4H 기준 같은 방향으로 큰 움직임 → 알트 같은 방향 진입 부스트
+# 반대 방향 알트 진입은 차단 (BTC 추세 거스름)
+CORRELATION_DETECTOR_ENABLED = os.environ.get("CORR_ENABLED", "true").lower() == "true"
+
+# v6.34 B6: 같은 방향 N종 이상 동시 진입 차단 (집중 위험 ↓)
+# 예: BTC, ETH, SOL 셋 다 숏인데 XRP, BNB 도 숏 진입하려 하면 차단
+MAX_SAME_DIRECTION_POSITIONS = int(os.environ.get("MAX_SAME_DIRECTION_POS", "3"))
+
+# v6.34 A4: 부진 심볼 자동 휴식 — 지난 N일 -X% 손실 누적시 24h 진입 차단
+SYMBOL_REST_DAYS = int(os.environ.get("SYMBOL_REST_DAYS", "7"))           # 평가 기간
+SYMBOL_REST_LOSS_THRESHOLD = float(os.environ.get("SYMBOL_REST_LOSS_THRESHOLD", "10.0"))  # -$10 누적
+SYMBOL_REST_HOURS = int(os.environ.get("SYMBOL_REST_HOURS", "24"))        # 휴식 시간
+
 # Refresh OHLCV cache every N seconds within a loop iteration (avoid spam)
 CACHE_15M_SEC = 30
 CACHE_1H_SEC  = 600
