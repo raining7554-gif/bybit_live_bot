@@ -107,6 +107,62 @@ def analyze_trade_async(trade: dict, snapshot: Optional[dict] = None):
     )
 
 
+def gate_check(symbol: str, signal: dict, snapshot: dict | None = None) -> dict:
+    """v6.33B: 진입 직전 AI final gate. (실시간, 동기, 빠른 평가).
+
+    Returns: {
+      "approved": True/False,
+      "reason": str,
+      "risk": "low"/"medium"/"high",
+    }
+    AI 비활성/quota 소진/오류시 항상 approved=True (개입 X).
+    """
+    try:
+        if not _agent or not _agent._enabled():
+            return {"approved": True, "reason": "AI off", "risk": "?"}
+        from intelligence import agent as _ag
+        # quota 사전 체크 — 소진시 통과
+        if _ag._quota_state.get("exhausted"):
+            return {"approved": True, "reason": "quota exhausted", "risk": "?"}
+    except Exception:
+        return {"approved": True, "reason": "AI err", "risk": "?"}
+
+    side = signal.get("side", "?")
+    score = signal.get("score", 0)
+    tier = signal.get("tier", "?")
+    tag = signal.get("tag", "D")
+    snap_str = ""
+    if snapshot:
+        snap_str = (
+            f"\n현재가 {snapshot.get('price', 0)}, RSI {snapshot.get('rsi', '?')}, "
+            f"BB pos {snapshot.get('bb_pos', '?')}, ADX {snapshot.get('adx', '?')}"
+        )
+
+    prompt = (
+        f"트레이딩 봇 진입 직전 AI 게이트 체크. JSON 만 응답.\n"
+        f"심볼: {symbol}\n"
+        f"방향: {side} (tag: {tag})\n"
+        f"점수: {score}/100, tier: {tier}\n"
+        f"{snap_str}\n\n"
+        f"이 진입에 명확한 위험 신호가 있나? (예: 큰 뉴스, 명백한 반대 추세,"
+        f" 슬리피지 위험)\n"
+        f'JSON: {{"approved": true|false, "reason": "20자내", "risk": "low|medium|high"}}'
+    )
+    try:
+        from intelligence.agent import _call_gemini, _extract_json
+        text, err = _call_gemini(prompt, want_json=True, timeout=15)
+        if err or not text:
+            return {"approved": True, "reason": err or "no resp", "risk": "?"}
+        data = _extract_json(text) or {}
+        return {
+            "approved": bool(data.get("approved", True)),
+            "reason": str(data.get("reason", ""))[:60],
+            "risk": str(data.get("risk", "?")),
+        }
+    except Exception as e:
+        return {"approved": True, "reason": f"exc: {e}", "risk": "?"}
+
+
 def detect_regime_async(snapshot: dict, *, asset: str | None = None,
                         send_telegram: bool = False,
                         verbose_errors: bool = False):
