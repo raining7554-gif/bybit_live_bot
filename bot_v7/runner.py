@@ -1111,9 +1111,7 @@ def main():
 
             if _loop_count % 10 == 1:
                 _heartbeat(equity)
-            # v6.34 A4: 매 시간 한 번 부진 심볼 휴식 체크
-            if _loop_count % 120 == 1:
-                _maybe_rest_underperforming_symbols()
+            # v6.38: 자동 휴식 제거 (사용자 요청). 심볼 가중치 시스템이 대체.
             # v6.35 A3: 4시간 간격 레짐 deep
             _maybe_run_regime_deep(symbol_dfs)
             _maybe_hourly_report(equity)
