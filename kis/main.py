@@ -468,16 +468,12 @@ def send_summary(dom_pos, os_pos, trade_count):
     except Exception:
         usd_avail = 0
 
-    lines = [f"⏰ <b>{hhmm()} KST</b>"]
+    # v6.42: USD-KRW 환율 (display 용 — 실거래는 USD 그대로)
+    import os as _os
+    USD_KRW_RATE = float(_os.environ.get("USD_KRW_RATE", "1380"))
 
-    if bal:
-        em = "📈" if bal.get("eval_profit", 0) >= 0 else "📉"
-        lines.append(
-            f"💰 KRW ₩{bal.get('total_eval', 0):,} (가용 ₩{bal.get('available', 0):,})\n"
-            f"   USD 가용 ${usd_avail:.2f}\n"
-            f"   {em} 손익 ₩{bal.get('eval_profit', 0):+,} "
-            f"({bal.get('profit_rate', 0):+.2f}%)"
-        )
+    # 헤더는 아래 손익 계산 후에 작성 (총자산 포함)
+    lines = []
 
     # v6.39: 국내/해외 시장별 누적 PnL 집계
     dom_total_pnl_krw = 0
@@ -562,6 +558,36 @@ def send_summary(dom_pos, os_pos, trade_count):
 
     if not dom_pos and not os_pos:
         lines.append("\n포지션: 없음")
+
+    # v6.42: 총자산 헤더 — 가장 위에 삽입
+    krw_total = bal.get('total_eval', 0) if bal else 0  # KRW 계좌 총평가
+    krw_available = bal.get('available', 0) if bal else 0
+    krw_eval_profit = bal.get('eval_profit', 0) if bal else 0
+    krw_profit_pct = bal.get('profit_rate', 0) if bal else 0
+
+    # USD 주식 평가액 (현재가 × 수량 합계, 위 루프에서 계산됨)
+    # os_stock_value_usd: 해외 보유 종목 현재 평가액
+    os_stock_value_usd = 0.0
+    if os_pos:
+        # 위 루프에서 cur 값을 못 가져와서 다시 계산하는 대신 cost+pnl 로 추정
+        os_stock_value_usd = os_total_cost + os_total_pnl_usd
+    usd_total = usd_avail + os_stock_value_usd
+    usd_total_krw = usd_total * USD_KRW_RATE
+
+    grand_total_krw = krw_total + usd_total_krw
+
+    em_total = "📈" if krw_eval_profit >= 0 else "📉"
+    header_lines = [
+        f"⏰ <b>{hhmm()} KST</b>",
+        f"💎 <b>총자산: ₩{grand_total_krw:,.0f}</b> "
+        f"(USD→KRW @ {USD_KRW_RATE:.0f})",
+        f"🇰🇷 KRW ₩{krw_total:,} (현금 ₩{krw_available:,})",
+        f"🇺🇸 USD ${usd_total:.2f} "
+        f"(현금 ${usd_avail:.2f}, 주식 ${os_stock_value_usd:.2f}) "
+        f"≈ ₩{usd_total_krw:,.0f}",
+        f"{em_total} 손익 ₩{krw_eval_profit:+,} ({krw_profit_pct:+.2f}%)",
+    ]
+    lines = header_lines + lines
 
     lines.append(f"\n📊 오늘 거래: {trade_count}회")
     telegram.send_force("\n".join(lines))
