@@ -479,6 +479,12 @@ def send_summary(dom_pos, os_pos, trade_count):
             f"({bal.get('profit_rate', 0):+.2f}%)"
         )
 
+    # v6.39: 국내/해외 시장별 누적 PnL 집계
+    dom_total_pnl_krw = 0
+    dom_total_cost = 0
+    os_total_pnl_usd = 0.0
+    os_total_cost = 0.0
+
     # 국내 보유 + 현재가 + PnL
     if dom_pos:
         lines.append("\n🇰🇷 <b>국내</b>")
@@ -501,6 +507,15 @@ def send_summary(dom_pos, os_pos, trade_count):
                 f"  {pnl_emoji} {p.get('name', t)}({t}) {qty}주 "
                 f"@ ₩{buy:,} → ₩{cur:,} ({pnl_pct:+.2f}%)"
             )
+            dom_total_pnl_krw += (cur - buy) * qty
+            dom_total_cost += buy * qty
+        # 국내 합계
+        dom_pnl_pct = (dom_total_pnl_krw / dom_total_cost * 100) if dom_total_cost > 0 else 0
+        dom_em = "📈" if dom_total_pnl_krw >= 0 else "📉"
+        lines.append(
+            f"  {dom_em} <b>국내 합계: ₩{dom_total_pnl_krw:+,.0f} "
+            f"({dom_pnl_pct:+.2f}%)</b>"
+        )
 
     # 해외 보유 + 현재가 + PnL
     if os_pos:
@@ -517,7 +532,6 @@ def send_summary(dom_pos, os_pos, trade_count):
                     {"AUTH": "", "EXCD": exc, "SYMB": t},
                 )
                 out = d.get("output", {})
-                # last 가 비어있으면 base 로 fallback
                 for k in ("last", "base", "open"):
                     v = out.get(k)
                     if v not in (None, "", "0"):
@@ -536,6 +550,15 @@ def send_summary(dom_pos, os_pos, trade_count):
                 f"  {pnl_emoji} {p.get('name', t)}({t}) {qty}주 "
                 f"@ ${buy:.2f} → ${cur:.2f} ({pnl_pct:+.2f}%)"
             )
+            os_total_pnl_usd += (cur - buy) * qty
+            os_total_cost += buy * qty
+        # 해외 합계
+        os_pnl_pct = (os_total_pnl_usd / os_total_cost * 100) if os_total_cost > 0 else 0
+        os_em = "📈" if os_total_pnl_usd >= 0 else "📉"
+        lines.append(
+            f"  {os_em} <b>해외 합계: ${os_total_pnl_usd:+.2f} "
+            f"({os_pnl_pct:+.2f}%)</b>"
+        )
 
     if not dom_pos and not os_pos:
         lines.append("\n포지션: 없음")
@@ -1463,10 +1486,9 @@ def main():
                         trade_count += 1
                     os_eod_done = True
 
-        # ════ 정각 KST 현황 요약 (시간별 1회, 운영시간 내만) ═══════════════════
+        # ════ 정각 KST 현황 요약 (v6.39: 24시간 매시간 — 시장 시간 외에도) ═══
         if (now.minute < 5
-                and now.hour != last_summary_kst_hour
-                and (is_dom_market_hours() or is_os_market_hours())):
+                and now.hour != last_summary_kst_hour):
             send_summary(dom_pos, os_pos, trade_count)
             last_summary_kst_hour = now.hour
             # v6.38: 자동 휴식 제거 (사용자 요청). 가중치 시스템이 대체.
