@@ -146,10 +146,9 @@ QTY_DECIMALS = {
 # Disaster SL placed server-side at -2% (catches even if bot crashes)
 DISASTER_SL_PCT = 0.02
 
-# v6.33A: 시간대 자동 차단 (KST 시간) — /diagnose 데이터 기반
-# 06~12 KST 시간대가 -$87 (최대 손실 구간) → 해당 시간 진입 차단
-# CSV 형식 (예: "6,7,8,9,10,11"). 빈 문자열이면 차단 없음.
-BLOCKED_HOURS_KST = os.environ.get("BLOCKED_HOURS_KST", "6,7,8,9,10,11")
+# v6.33A → v6.47: 시간대 자동 차단 default OFF (사용자 요청 "정지 빼줘")
+# env 로 다시 활성 원하면: BLOCKED_HOURS_KST="6,7,8,9,10,11"
+BLOCKED_HOURS_KST = os.environ.get("BLOCKED_HOURS_KST", "")
 
 def _parse_blocked_hours() -> set:
     s = BLOCKED_HOURS_KST.strip()
