@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 
 from . import ai
+from . import claude_agent
 from . import config as cfg
 from . import exchange as ex
 from . import notifier as tg
@@ -713,6 +714,20 @@ def _setup_handlers():
         except Exception as e:
             tg.send(f"⚠️ /diagnose 오류: {e}")
 
+    def agent_cmd():
+        """v6.43: Claude Agent 수동 트리거."""
+        if not cfg.CLAUDE_AGENT_ENABLED:
+            tg.send("⚠️ Claude Agent 비활성 (CLAUDE_AGENT_ENABLED=false)")
+            return
+        if not claude_agent._enabled():
+            tg.send("⚠️ ANTHROPIC_API_KEY 미설정")
+            return
+        tg.send("🤖 Claude Agent 분석 시작...")
+        try:
+            claude_agent.run_analysis()
+        except Exception as e:
+            tg.send(f"⚠️ Claude Agent 오류: {type(e).__name__}: {e}")
+
     def regime_cmd():
         """v6.0: 룰베이스 레짐 분류 즉시 조회 (모든 심볼)."""
         if not _last_regime:
@@ -760,6 +775,7 @@ def _setup_handlers():
         "/weights": weights_cmd,
         "/diagnose": diagnose_cmd,
         "/regime":  regime_cmd,
+        "/agent":   agent_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
@@ -800,6 +816,25 @@ def _maybe_run_weekly_review():
 # v6.35 A3: 레짐 deep analysis 캐시 (4h 간격)
 _last_regime_deep_ts: float = 0.0
 _last_regime_deep: dict = {}
+
+# v6.43: Claude Agent 시간별 트리거 캐시
+_last_claude_agent_ts: float = 0.0
+
+
+def _maybe_run_claude_agent():
+    """v6.43: 시간별 1회 Claude Agent 자율 분석."""
+    global _last_claude_agent_ts
+    if not cfg.CLAUDE_AGENT_ENABLED:
+        return
+    if not claude_agent._enabled():
+        return
+    if time.time() - _last_claude_agent_ts < cfg.CLAUDE_AGENT_INTERVAL_SEC:
+        return
+    _last_claude_agent_ts = time.time()
+    try:
+        claude_agent.run_analysis()
+    except Exception as e:
+        print(f"[claude_agent] err: {e}", flush=True)
 
 
 def _maybe_run_regime_deep(symbol_dfs: dict):
@@ -1130,6 +1165,8 @@ def main():
             # v6.38: 자동 휴식 제거 (사용자 요청). 심볼 가중치 시스템이 대체.
             # v6.35 A3: 4시간 간격 레짐 deep
             _maybe_run_regime_deep(symbol_dfs)
+            # v6.43: 시간별 Claude Agent 자율 분석
+            _maybe_run_claude_agent()
             _maybe_hourly_report(equity)
             _maybe_run_weekly_review()
 
