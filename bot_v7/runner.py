@@ -722,11 +722,24 @@ def _setup_handlers():
         if not claude_agent._enabled():
             tg.send("⚠️ ANTHROPIC_API_KEY 미설정")
             return
-        tg.send("🤖 Claude Agent 분석 시작...")
+        # v6.45: 즉시 단계별 알림 — 침묵 방지
+        tg.send("🤖 Claude Agent 분석 시작 (1~3분 소요 가능)...")
         try:
-            claude_agent.run_analysis()
+            # SDK + 키 사전 검증
+            try:
+                import anthropic as _anthropic_check  # noqa
+                tg.send(f"✓ anthropic SDK 로드됨 (v{_anthropic_check.__version__})")
+            except ImportError as ie:
+                tg.send(f"❌ anthropic SDK 미설치: {ie}\nRailway 에서 requirements.txt 재빌드 필요")
+                return
+            ok = claude_agent.run_analysis()
+            if not ok:
+                tg.send("❌ run_analysis 가 False 반환 — Railway 로그 확인")
         except Exception as e:
-            tg.send(f"⚠️ Claude Agent 오류: {type(e).__name__}: {e}")
+            import traceback as _tb
+            err = f"{type(e).__name__}: {e}"
+            print(f"[agent_cmd err] {_tb.format_exc()}", flush=True)
+            tg.send(f"⚠️ Claude Agent 예외:\n{err}\n(전체 traceback 은 Railway 로그)")
 
     def regime_cmd():
         """v6.0: 룰베이스 레짐 분류 즉시 조회 (모든 심볼)."""
