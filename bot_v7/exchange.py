@@ -185,6 +185,36 @@ def update_stop_loss(symbol: str, side_open: str, new_sl_price: float) -> bool:
         return False
 
 
+def set_server_trailing(symbol: str, trail_distance: float,
+                        activate_price: float | None = None) -> bool:
+    """v6.41 A: Bybit 서버사이드 trailing stop 등록.
+
+    trail_distance: 가격 절대 거리 (예: BTC $300 = peak 대비 $300 풀백시 청산)
+    activate_price: 트레일 시작 가격 (이 가격 도달 후 trail 활성). None = 즉시.
+
+    봇 sleep 무관, tick 단위로 서버가 추적.
+    """
+    try:
+        params = {
+            "category": "linear", "symbol": symbol,
+            "trailingStop": str(_round_price(symbol, trail_distance)),
+            "positionIdx": 0,
+        }
+        if activate_price is not None:
+            params["activePrice"] = str(_round_price(symbol, activate_price))
+        r = session().set_trading_stop(**params)
+        ok = r.get("retCode") == 0
+        if not ok:
+            print(f"[set trail err] {r.get('retMsg', '?')}", flush=True)
+        return ok
+    except Exception as e:
+        msg = str(e)
+        if "34040" in msg or "not modified" in msg:
+            return True
+        print(f"[set trail exc] {e}", flush=True)
+        return False
+
+
 # ─── OHLCV cache ───────────────────────────────────────────────
 _cache: dict[tuple[str, str], tuple[pd.DataFrame, float]] = {}
 _CACHE_TTL = {"15": cfg.CACHE_15M_SEC, "60": cfg.CACHE_1H_SEC,
