@@ -44,13 +44,28 @@ def _get_client():
         return _client
     try:
         from anthropic import Anthropic
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            return None
-        _client = Anthropic(api_key=api_key)
+    except ImportError as e:
+        print(f"[claude_agent] anthropic SDK 미설치: {e}", flush=True)
+        try:
+            tg.send_force("⚠️ Claude Agent: anthropic SDK 미설치 — Railway 재배포 필요")
+        except Exception:
+            pass
+        return None
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        try:
+            tg.send_force("⚠️ Claude Agent: ANTHROPIC_API_KEY env 비어있음")
+        except Exception:
+            pass
+        return None
+    try:
+        _client = Anthropic(api_key=api_key, timeout=60.0)
         return _client
-    except ImportError:
-        print("[claude_agent] anthropic SDK 미설치 — pip install anthropic", flush=True)
+    except Exception as e:
+        try:
+            tg.send_force(f"⚠️ Claude Agent: 클라이언트 생성 실패 — {type(e).__name__}: {e}")
+        except Exception:
+            pass
         return None
 
 
@@ -358,11 +373,12 @@ Cost optimization:
 
 def run_analysis(user_prompt: str | None = None) -> bool:
     """단일 분석 사이클 실행. 성공시 True."""
+    print("[claude_agent] run_analysis start", flush=True)
     client = _get_client()
     if not client:
-        print("[claude_agent] no client (API key missing?)", flush=True)
-        tg.send_force("⚠️ Claude Agent: API key 설정 실패")
+        print("[claude_agent] no client", flush=True)
         return False
+    print("[claude_agent] client OK, calling Anthropic API...", flush=True)
     if user_prompt is None:
         user_prompt = (
             f"현재 시각 {datetime.now().strftime('%Y-%m-%d %H:%M')} KST. "
