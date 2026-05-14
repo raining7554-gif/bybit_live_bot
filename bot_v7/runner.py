@@ -741,6 +741,35 @@ def _setup_handlers():
             print(f"[agent_cmd err] {_tb.format_exc()}", flush=True)
             tg.send(f"⚠️ Claude Agent 예외:\n{err}\n(전체 traceback 은 Railway 로그)")
 
+    def agent_ping_cmd():
+        """v6.46: 간단 Anthropic API ping (도구/분석 없음, 연결만 검증)."""
+        tg.send("🏓 Anthropic API ping 시작...")
+        try:
+            from anthropic import Anthropic
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            if not api_key:
+                tg.send("❌ ANTHROPIC_API_KEY env 비어있음")
+                return
+            client = Anthropic(api_key=api_key, timeout=30.0)
+            t0 = time.time()
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=50,
+                messages=[{"role": "user", "content": "Say 'pong' in one word."}],
+            )
+            elapsed = time.time() - t0
+            text = response.content[0].text if response.content else "no content"
+            usage = response.usage
+            tg.send(
+                f"✓ Ping 성공 ({elapsed:.1f}s)\n"
+                f"응답: {text}\n"
+                f"tokens in={usage.input_tokens} out={usage.output_tokens}"
+            )
+        except Exception as e:
+            import traceback as _tb
+            print(f"[agent_ping err] {_tb.format_exc()}", flush=True)
+            tg.send(f"❌ Ping 실패: {type(e).__name__}: {str(e)[:300]}")
+
     def regime_cmd():
         """v6.0: 룰베이스 레짐 분류 즉시 조회 (모든 심볼)."""
         if not _last_regime:
@@ -789,6 +818,7 @@ def _setup_handlers():
         "/diagnose": diagnose_cmd,
         "/regime":  regime_cmd,
         "/agent":   agent_cmd,
+        "/agent_ping": agent_ping_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
