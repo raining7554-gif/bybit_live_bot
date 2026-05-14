@@ -1469,11 +1469,7 @@ def main():
                 and (is_dom_market_hours() or is_os_market_hours())):
             send_summary(dom_pos, os_pos, trade_count)
             last_summary_kst_hour = now.hour
-            # v6.36: 정각 1회 부진 심볼 휴식 체크
-            try:
-                maybe_rest_underperforming_kis()
-            except Exception as e:
-                print(f"[MAIN] rest underperformers err: {e}")
+            # v6.38: 자동 휴식 제거 (사용자 요청). 가중치 시스템이 대체.
 
         # ════ v5.0: 09:00 KST KR 시장 뉴스 sentiment (일 1회) ═════════════════
         today_str = now.strftime("%Y-%m-%d")
