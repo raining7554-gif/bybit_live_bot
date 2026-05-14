@@ -302,10 +302,32 @@ def _high_trail_mult_dynamic(peak_margin_pct: float) -> float:
 
 def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low,
                    trail_mult: float = 1.5):
-    """v9: trail_mult is tier-aware (mid 2.5, high 3.0)."""
+    """v9: trail_mult is tier-aware (mid 2.5, high 3.0).
+
+    v6.41 B: BE 가속 — peak_margin_pct ≥ 5% (high) / 7% (mid) 도달시 즉시 BE.
+    기존 +1R 가격 기준은 큰 사이즈에서 너무 늦음.
+    """
     if atr_15m <= 0:
         return None
+    leverage = pos.get("leverage", 1.0)
+    tier = pos.get("tier", "?")
+    peak = pos.get("peak_margin_pct", 0.0)
+    # v6.41 B: tier 별 BE 가속 임계치
+    be_fast_threshold = None
+    if tier == "high":
+        be_fast_threshold = 0.05   # +5% margin
+    elif tier == "mid":
+        be_fast_threshold = 0.07   # +7% margin
+
     if side == "Buy":
+        # 빠른 BE (margin 기준)
+        if (not pos.get("be_done") and be_fast_threshold is not None
+                and peak >= be_fast_threshold):
+            new_stop = entry
+            if new_stop > cur_stop:
+                pos["be_done"] = True
+                return {"action": "modify_stop", "stop": new_stop}
+        # 기존 BE (R 기준)
         if not pos.get("be_done") and (last_high - entry) >= R:
             new_stop = entry
             if new_stop > cur_stop:
@@ -316,6 +338,12 @@ def _be_then_trail(pos, side, entry, cur_stop, R, atr_15m, last_high, last_low,
             if cand > cur_stop:
                 return {"action": "modify_stop", "stop": cand}
     else:
+        if (not pos.get("be_done") and be_fast_threshold is not None
+                and peak >= be_fast_threshold):
+            new_stop = entry
+            if new_stop < cur_stop:
+                pos["be_done"] = True
+                return {"action": "modify_stop", "stop": new_stop}
         if not pos.get("be_done") and (entry - last_low) >= R:
             new_stop = entry
             if new_stop < cur_stop:
