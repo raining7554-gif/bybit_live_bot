@@ -297,20 +297,12 @@ def _try_open(symbol: str, equity: float, signal: dict,
         # 한 번만 알림 (같은 시간대에 반복 알림 방지 — symbol+hour dedup)
         return  # 조용히 skip (시간대 차단은 정상 동작)
 
-    # v6.33C: 자동 회복 휴식 — 일일 손실 -3% 도달시 진입 차단
-    today_d, today_pct = _today_pnl(equity)
-    if today_pct <= -cfg.DAILY_LOSS_REST_PCT:
-        # 첫 발견 시 1회만 알림 (loop_count dedup 효과)
-        if _loop_count % 30 == 1:
-            tg.send(
-                f"🛌 자동 휴식 발동 (오늘 ${today_d:+.2f} / {today_pct*100:+.2f}%)\n"
-                f"-{cfg.DAILY_LOSS_REST_PCT*100:.0f}% 도달 — 다음 KST 자정까지 진입 차단"
-            )
-        return
+    # v6.47: 자동 회복 휴식 (-3% daily) 제거 — 사용자 요청 "정지 빼줘"
+    # /halt 수동 정지만 유지. safety.py AUTO_HALT_ENABLED 도 이미 False.
 
     side = signal["side"]
 
-    # v6.34 A4: 부진 심볼 자동 휴식 체크
+    # v6.34 A4: 부진 심볼 자동 휴식 체크 (v6.38 에서 등록은 제거되어 작동 X)
     ok_rest, reason_rest = _check_symbol_rest(symbol)
     if not ok_rest:
         return  # 알림 X (휴식 중은 정상 동작)
@@ -329,6 +321,9 @@ def _try_open(symbol: str, equity: float, signal: dict,
             if _loop_count % 30 == 1:
                 tg.send(f"⏸️ [{_short(symbol)}] 상관 차단 — {reason_corr}")
             return
+
+    # v6.47: 자동 회복 휴식 제거 (사용자 요청 — 정지 빼줘)
+    # v6.33C 의 일일 -3% 자동 차단 코드 비활성. /halt 수동 정지만 유지.
 
     lev = signal["leverage"]
     is_mr = bool(signal.get("mr"))
