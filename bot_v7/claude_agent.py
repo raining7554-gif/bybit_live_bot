@@ -320,18 +320,20 @@ TOOL_FUNCS = {
 SYSTEM_PROMPT = """You are a quantitative trading strategy analyst for an automated Bybit + KIS bot.
 
 Your role:
-- Periodically (hourly) analyze recent trades + market state
+- Periodically analyze recent trades + market state
 - Find patterns that suggest config/strategy improvements
 - Propose changes via GitHub PR (human reviews)
 - Notify user via Telegram with concise findings
 
+REQUIRED: ALWAYS end with at least one send_telegram call summarizing your findings.
+Even if no PR is needed, report what you analyzed and your conclusion.
+
 Guidelines:
 1. **Data-driven only** — every recommendation needs sample size ≥ 20 trades.
 2. **One change per session** — avoid over-tuning.
-3. **Conservative** — when in doubt, do nothing.
-4. **No spam** — if no significant pattern, send_telegram("no actionable signal this hour") OR skip.
-5. **Test hypothesis mentally** — before PR, verify the change makes sense.
-6. **PR body must include**:
+3. **Conservative** — when in doubt, propose nothing but DO report what you saw.
+4. **Always notify** — final send_telegram with: sample size, key findings, action taken (or "no action — reason").
+5. **PR body must include**:
    - Data: sample size, win rate, PnL impact
    - Hypothesis: what pattern was found
    - Change: exact param diff
@@ -350,8 +352,7 @@ Common patterns to watch for:
 - Score correlation with win rate (D_INV experiment)
 
 Cost optimization:
-- Use tools efficiently, don't over-query
-- One full cycle should use < 10 tool calls
+- Use tools efficiently, max ~6-8 tool calls per cycle.
 """
 
 
@@ -359,12 +360,15 @@ def run_analysis(user_prompt: str | None = None) -> bool:
     """단일 분석 사이클 실행. 성공시 True."""
     client = _get_client()
     if not client:
+        print("[claude_agent] no client (API key missing?)", flush=True)
+        tg.send_force("⚠️ Claude Agent: API key 설정 실패")
         return False
     if user_prompt is None:
         user_prompt = (
             f"현재 시각 {datetime.now().strftime('%Y-%m-%d %H:%M')} KST. "
-            f"지난 24시간 거래 분석하고, 명확한 개선 신호 있으면 PR 제안. "
-            f"표본 부족하거나 신호 약하면 그냥 'no action' Telegram 1줄 알림."
+            f"지난 24시간 거래 분석. 명확한 개선 신호 있으면 PR 제안. "
+            f"표본 부족/신호 약함이면 'no action — 이유' 로 Telegram. "
+            f"중요: 분석 결과를 반드시 send_telegram 으로 보고하고 끝낼 것."
         )
 
     messages: list = [{"role": "user", "content": user_prompt}]
@@ -372,6 +376,9 @@ def run_analysis(user_prompt: str | None = None) -> bool:
     max_iters = 10
     total_input = 0
     total_output = 0
+    telegram_sent = False
+    tools_used = []
+    last_text = ""
 
     for iteration in range(max_iters):
         try:
@@ -387,7 +394,9 @@ def run_analysis(user_prompt: str | None = None) -> bool:
                 messages=messages,
             )
         except Exception as e:
-            print(f"[claude_agent] API err: {e}", flush=True)
+            err_msg = f"{type(e).__name__}: {str(e)[:200]}"
+            print(f"[claude_agent] API err: {err_msg}", flush=True)
+            tg.send_force(f"⚠️ Claude Agent API 오류:\n{err_msg}")
             return False
 
         total_input += getattr(response.usage, "input_tokens", 0)
@@ -395,6 +404,11 @@ def run_analysis(user_prompt: str | None = None) -> bool:
 
         # assistant turn 저장
         messages.append({"role": "assistant", "content": response.content})
+
+        # 마지막 텍스트 응답 기억 (fallback 용)
+        for block in response.content:
+            if block.type == "text":
+                last_text = block.text
 
         if response.stop_reason == "end_turn":
             break
@@ -404,6 +418,9 @@ def run_analysis(user_prompt: str | None = None) -> bool:
         for block in response.content:
             if block.type != "tool_use":
                 continue
+            tools_used.append(block.name)
+            if block.name == "send_telegram":
+                telegram_sent = True
             fn = TOOL_FUNCS.get(block.name)
             if not fn:
                 result = json.dumps({"error": f"unknown tool: {block.name}"})
@@ -425,7 +442,19 @@ def run_analysis(user_prompt: str | None = None) -> bool:
 
     print(
         f"[claude_agent] cycle done. iters={iteration + 1} "
-        f"tokens in={total_input} out={total_output}",
+        f"tokens in={total_input} out={total_output} "
+        f"tools={tools_used} telegram_sent={telegram_sent}",
         flush=True,
     )
+
+    # v6.44: fallback — telegram 안 보냈으면 강제 요약 전송
+    if not telegram_sent:
+        fallback = last_text[:500] if last_text else "분석 완료 (구체 응답 없음)"
+        tg.send_force(
+            f"🤖 Claude Agent (요약)\n"
+            f"도구 호출: {len(tools_used)}회 — {', '.join(set(tools_used)) or '없음'}\n"
+            f"토큰: in={total_input} out={total_output}\n"
+            f"응답: {fallback}"
+        )
+
     return True
