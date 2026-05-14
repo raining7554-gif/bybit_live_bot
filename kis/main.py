@@ -1150,6 +1150,8 @@ def main():
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
     last_news_report_kst_date = ""  # v5.0: 09:00 KST 시장 뉴스 (일 1회)
     last_rotation_check_kst_hour = -1  # v6.7: 매 시간 09:10 ~ 14:10 회전 체크
+    # v6.40: 회전 매도 후 24h 재매수 차단 (같은 루프 스캐너 재픽업 방지)
+    _rotation_sold_until: dict[str, float] = {}
 
     while True:
         now = now_kst()
@@ -1238,6 +1240,13 @@ def main():
                     and len(dom_pos) < max_pos):
                 if elapsed(last_dom_scan) >= SCAN_INTERVAL_SEC:
                     try:
+                        # v6.40: 회전으로 매도된 종목 24h 재매수 차단
+                        import time as _t
+                        _now_ts = _t.time()
+                        _rot_excluded = [
+                            t for t, ts in _rotation_sold_until.items() if ts > _now_ts
+                        ]
+                        excluded_combined = list(dom_pos.keys()) + _rot_excluded
                         if DOM_STRATEGY_MODE == "clenow":
                             import strategy_clenow_kr as clenow
                             # 자동 가격상한: 시드 작으면 (총자본 95% / 포지션수) 까지 = 1주 보장
@@ -1250,13 +1259,13 @@ def main():
                             else:
                                 price_ceiling = None
                             cands = clenow.scan_clenow_candidates(
-                                excluded_tickers=list(dom_pos.keys()),
+                                excluded_tickers=excluded_combined,
                                 max_positions=max_pos - len(dom_pos),
                                 max_price=price_ceiling,
                             )
                         else:
                             cands = scanner.scan_candidates(
-                                exclude_tickers=list(dom_pos.keys())
+                                exclude_tickers=excluded_combined,
                             )
                     except Exception as e:
                         print(f"[MAIN] 국내 스캔 오류: {e}")
@@ -1560,6 +1569,9 @@ def main():
                                 f"{buy_info['ticker']} {buy_info['score']:.0f} (+{s['score_gap']:.0f})"
                             ):
                                 dom_pos.pop(sell_t, None)
+                                # v6.40: 회전 매도 종목은 24h 재매수 차단
+                                import time as _t
+                                _rotation_sold_until[sell_t] = _t.time() + 24 * 3600
                                 # 신규 매수
                                 bought = trader.buy_market(
                                     buy_info["ticker"], buy_info["name"],
@@ -1571,6 +1583,13 @@ def main():
                                     bought["strategy_type"] = "CLENOW"
                                     dom_pos[buy_info["ticker"]] = bought
                                     trade_count += 2  # sell + buy
+                                else:
+                                    # v6.40: 회전 매수 실패 명시
+                                    telegram.send_force(
+                                        f"⚠️ 회전 매수 실패: {buy_info['name']}"
+                                        f"({buy_info['ticker']}) @ ₩{buy_info.get('close', 0):,}\n"
+                                        f"매도된 {s['sell']['ticker']} 는 24h 재진입 차단"
+                                    )
                 last_rotation_check_kst_hour = now.hour
             except Exception as e:
                 print(f"[MAIN] rotation 체크 err: {type(e).__name__}: {e}")
