@@ -1161,6 +1161,60 @@ def main():
         except Exception as e:
             telegram.send(f"⚠️ /sync_us 오류: {type(e).__name__}: {e}")
 
+    def cmd_universe():
+        """v6.48: 현재 Clenow top 20 종목 점수 표시 — 유니버스 다양성 확인용."""
+        try:
+            import strategy_clenow_kr as _clenow
+            from config import CLENOW_WINDOW, CLENOW_EXIT_MA, DOM_UNIVERSE_LIMIT
+            telegram.send("📊 Clenow top 20 스캔 중 (~2분)...")
+
+            universe = _clenow.KR_UNIVERSE_TOP350[:DOM_UNIVERSE_LIMIT]
+            scored = []
+            n = CLENOW_WINDOW
+            for ticker, name in universe:
+                try:
+                    candles = _clenow.get_kr_daily(ticker, count=n + 10)
+                    if len(candles) < n:
+                        continue
+                    closes = [c["close"] for c in candles]
+                    score = _clenow.clenow_score(closes, n)
+                    if score != score:  # NaN
+                        continue
+                    ma50 = _clenow._sma(closes, CLENOW_EXIT_MA)
+                    above_ma = closes[0] > ma50
+                    scored.append({
+                        "ticker": ticker, "name": name,
+                        "score": float(score), "close": closes[0],
+                        "above_ma50": above_ma,
+                    })
+                except Exception:
+                    continue
+            scored.sort(key=lambda x: -x["score"])
+            top20 = scored[:20]
+
+            held = set(dom_pos.keys())
+            lines = [
+                f"📊 <b>Clenow Top 20</b> (유니버스 {len(universe)}종 / 점수매김 {len(scored)})",
+                f"━━━━━━━━━━━━━━",
+            ]
+            for i, s in enumerate(top20, 1):
+                tag = ""
+                if s["ticker"] in held:
+                    tag = " ✅ 보유"
+                elif not s["above_ma50"]:
+                    tag = " ⚠️ MA50 이탈"
+                lines.append(
+                    f"{i}. {s['name']}({s['ticker']}) "
+                    f"점수 {s['score']:.0f} @ ₩{s['close']:,.0f}{tag}"
+                )
+            lines.append("")
+            lines.append(f"💡 보유 {len(held)}종 / 최대 {CLENOW_MAX_POSITIONS}종")
+            telegram.send("\n".join(lines), dedup_sec=10)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            telegram.send(f"⚠️ /universe 오류: {type(e).__name__}: {e}")
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
@@ -1171,6 +1225,7 @@ def main():
         "/scan_us": cmd_scan_us,
         "/test_us": cmd_test_us,
         "/sync_us": cmd_sync_us,
+        "/universe": cmd_universe,
     }
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)

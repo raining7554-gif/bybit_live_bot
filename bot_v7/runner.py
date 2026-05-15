@@ -430,17 +430,19 @@ def _try_open(symbol: str, equity: float, signal: dict,
                  else min(strat_stop, disaster_sl)
     ex.update_stop_loss(symbol, side, final_stop)
 
-    # v6.41 A: mid/high tier 서버사이드 trailing stop 등록
+    # v6.41 A → v6.48: mid/high tier 서버사이드 trailing stop 등록
     # 봇 sleep 무관 — Bybit 가 tick 단위로 trail 추적
+    # v6.48: trail 거리 좁힘 (이전 trail 너무 넓어 +25% → -15% 패턴 발생)
     tier_for_trail = signal.get("tier", "base")
     if tier_for_trail in ("mid", "high") and not is_mr:
         atr_v = signal["atr_15m"]
         if atr_v > 0:
-            # 진입 후 trail 활성 가격 — small profit (+0.5×ATR) 도달시 시작
-            # 그 후 peak - trail_dist 위치로 자동 추적
-            trail_dist = 1.5 * atr_v if tier_for_trail == "mid" else 2.0 * atr_v
-            activate = entry_price + 0.5 * atr_v if side == "Buy" \
-                       else entry_price - 0.5 * atr_v
+            # v6.48: 활성 늦춤 + trail 거리 좁힘
+            # activate at +1×ATR (was +0.5) — 충분히 수익난 후에만 활성
+            # trail high 1×ATR (was 2×), mid 0.75×ATR (was 1.5×)
+            trail_dist = 0.75 * atr_v if tier_for_trail == "mid" else 1.0 * atr_v
+            activate = entry_price + 1.0 * atr_v if side == "Buy" \
+                       else entry_price - 1.0 * atr_v
             ok_trail = ex.set_server_trailing(symbol, trail_dist, activate)
             if ok_trail:
                 print(f"[{symbol}] 서버 trail 등록 — 거리={trail_dist:.2f} "
