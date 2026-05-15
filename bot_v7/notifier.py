@@ -74,6 +74,12 @@ def send(msg: str, parse_mode: Optional[str] = "HTML"):
         print(f"[TG EXC] {type(e).__name__}: {e}", flush=True)
 
 
+# v6.50: KIS 와 호환되는 send_force alias (claude_agent.py 에서 사용)
+def send_force(msg: str, parse_mode: Optional[str] = "HTML"):
+    """KIS telegram.send_force 와 동일 인터페이스. 단순 alias."""
+    send(msg, parse_mode=parse_mode)
+
+
 def _normalize(text: str) -> str:
     """'/status@my_bot_username 인자' → '/status'."""
     text = text.strip()
