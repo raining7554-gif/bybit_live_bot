@@ -24,7 +24,15 @@ def _parse_symbols() -> list[str]:
     return [single]
 
 SYMBOLS    = _parse_symbols()
-SYMBOL     = SYMBOLS[0]  # 레거시 호환 (단일 심볼 코드 경로)
+# v6.49 A: SOL universe 제외 (30일 -$138 단독 손실원)
+# env SYMBOL_BLACKLIST 로 차단 종목 콤마 구분 지정
+_blacklist = set(
+    s.strip().upper()
+    for s in os.environ.get("SYMBOL_BLACKLIST", "SOLUSDT").split(",")
+    if s.strip()
+)
+SYMBOLS    = [s for s in SYMBOLS if s not in _blacklist]
+SYMBOL     = SYMBOLS[0] if SYMBOLS else "BTCUSDT"  # 레거시 호환
 LOOP_SEC   = int(os.environ.get("LOOP_SEC", "30"))
 POSITION_MODE = os.environ.get("POSITION_MODE", "one_way")
 
@@ -64,7 +72,7 @@ ENTRY_MIN_SCORE   = 55.0
 # 데이터: 50건 -$94 손실 + 점수 역상관 (-5.3) + server_stop 56%
 # 70 점 이상은 추세 끝물 잡는 패턴 가설로 long ↔ short 반전
 # 환경변수로 임계치 조정 가능 (200 = 비활성)
-D_INVERSE_THRESHOLD = float(os.environ.get("D_INVERSE_THRESHOLD", "70"))
+D_INVERSE_THRESHOLD = float(os.environ.get("D_INVERSE_THRESHOLD", "65"))
 SCORE_TIER_MICRO  = 60.0   # 55..59 → 3x
 SCORE_TIER_PROBE  = 70.0   # 60..69 → 5x
 SCORE_TIER_BASE   = 80.0   # 70..79 → 10x
