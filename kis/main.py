@@ -1396,6 +1396,7 @@ def main():
     # v6.52: KIS Multi-agent — Bybit 와 동일 패턴
     try:
         import claude_agent as kis_agent
+        print("[MAIN] kis claude_agent 임포트 성공", flush=True)
 
         def cmd_kis_agent():
             if not kis_agent._enabled():
@@ -1403,9 +1404,50 @@ def main():
                 return
             telegram.send("🤖 KIS Claude Agent 분석 시작 (1~3분)...")
             try:
-                kis_agent.run_analysis()
+                # SDK 사전 검증
+                try:
+                    import anthropic as _anth_check
+                    telegram.send(f"✓ anthropic SDK v{_anth_check.__version__}")
+                except ImportError as ie:
+                    telegram.send(f"❌ anthropic SDK 미설치: {ie}\nKIS Railway 재배포 필요 (requirements.txt)")
+                    return
+                ok = kis_agent.run_analysis()
+                if not ok:
+                    telegram.send("❌ run_analysis False — Railway 로그 확인")
             except Exception as e:
-                telegram.send(f"⚠️ Agent 오류: {type(e).__name__}: {e}")
+                import traceback as _tb
+                print(f"[KIS agent err] {_tb.format_exc()}", flush=True)
+                telegram.send(f"⚠️ Agent 예외: {type(e).__name__}: {str(e)[:200]}")
+
+        def cmd_kis_agent_ping():
+            """v6.53: Anthropic API 연결 분리 검증."""
+            telegram.send("🏓 KIS Anthropic API ping...")
+            try:
+                from anthropic import Anthropic
+                api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+                if not api_key:
+                    telegram.send("❌ ANTHROPIC_API_KEY env 비어있음 (KIS Railway)")
+                    return
+                client = Anthropic(api_key=api_key, timeout=30.0)
+                import time as _t
+                t0 = _t.time()
+                response = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=50,
+                    messages=[{"role": "user", "content": "Say 'pong'"}],
+                )
+                elapsed = _t.time() - t0
+                text = response.content[0].text if response.content else "?"
+                usage = response.usage
+                telegram.send(
+                    f"✓ Ping ({elapsed:.1f}s)\n"
+                    f"응답: {text}\n"
+                    f"tokens in={usage.input_tokens} out={usage.output_tokens}"
+                )
+            except Exception as e:
+                import traceback as _tb
+                print(f"[KIS ping err] {_tb.format_exc()}", flush=True)
+                telegram.send(f"❌ Ping 실패: {type(e).__name__}: {str(e)[:300]}")
 
         def cmd_kis_research():
             telegram.send("🔬 KIS Research Agent 시작...")
@@ -1441,12 +1483,25 @@ def main():
                 telegram.send(f"⚠️ Portfolio 오류: {type(e).__name__}: {e}")
 
         cmd_handlers["/agent"] = cmd_kis_agent
+        cmd_handlers["/agent_ping"] = cmd_kis_agent_ping
         cmd_handlers["/research"] = cmd_kis_research
         cmd_handlers["/risk"] = cmd_kis_risk
         cmd_handlers["/portfolio"] = cmd_kis_portfolio
         print("[MAIN] KIS Multi-agent 명령 등록됨 (/agent /research /risk /portfolio)")
     except ImportError as e:
-        print(f"[MAIN] KIS claude_agent 임포트 실패: {e}")
+        print(f"[MAIN] KIS claude_agent 임포트 실패: {e}", flush=True)
+        # 사용자도 알 수 있게 텔레그램에 한 번
+        try:
+            telegram.send_force(f"⚠️ KIS Multi-agent 비활성: {e}")
+        except Exception:
+            pass
+    except Exception as e:
+        import traceback
+        print(f"[MAIN] KIS Multi-agent setup err: {traceback.format_exc()}", flush=True)
+        try:
+            telegram.send_force(f"⚠️ KIS Multi-agent 셋업 오류: {type(e).__name__}: {e}")
+        except Exception:
+            pass
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
     last_news_report_kst_date = ""  # v5.0: 09:00 KST 시장 뉴스 (일 1회)
