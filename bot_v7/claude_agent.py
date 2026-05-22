@@ -603,8 +603,52 @@ Use when: no significant data, small sample
 """
 
 
-def run_analysis(user_prompt: str | None = None) -> bool:
-    """단일 분석 사이클 실행. 성공시 True."""
+SYSTEM_PROMPT_RESEARCH = """You are a quant strategy RESEARCH specialist.
+
+Focus: find new patterns, propose backtest experiments.
+- Read recent trades + market state
+- Identify untested hypotheses
+- Use write_strategy_variant to create experimental files
+- Use trigger_backtest_sweep to validate
+- DO NOT propose live config changes (research only)
+
+Always end with send_telegram summarizing what you found + what you tested.
+Max 6 tool calls. Sample requirements: ≥ 30 trades for pattern claims.
+"""
+
+SYSTEM_PROMPT_RISK = """You are a quant RISK specialist.
+
+Focus: position sizing, exposure, drawdown alerts.
+- Read current positions + recent PnL
+- Check tier/symbol concentration
+- Alert if exposure > safe limit
+- Propose MAX_TOTAL_MARGIN adjustment if needed
+
+Always end with send_telegram with risk status:
+- 🟢 안전
+- 🟡 주의 (drawdown > 5%)
+- 🔴 위험 (drawdown > 10% OR concentration > 70%)
+
+If 🔴, propose specific action via create_github_pr or alert user.
+Max 4 tool calls. No experimental work — risk only.
+"""
+
+SYSTEM_PROMPT_PORTFOLIO = """You are a quant PORTFOLIO specialist.
+
+Focus: capital allocation across strategies/markets.
+- Compare D / D_INV / MR strategy performance
+- Compare symbol performance (which to boost/cut)
+- Suggest rebalancing (e.g., "shift 20% from D to MR")
+- Track weekly performance trends
+
+Always end with send_telegram allocation recommendation.
+Max 5 tool calls. Focus on macro patterns, not individual trades.
+"""
+
+
+def run_analysis(user_prompt: str | None = None,
+                 mode: str = "default") -> bool:
+    """단일 분석 사이클 실행. mode = default/research/risk/portfolio."""
     print("[claude_agent] run_analysis start", flush=True)
     client = _get_client()
     if not client:
@@ -618,6 +662,13 @@ def run_analysis(user_prompt: str | None = None) -> bool:
             f"표본 부족/신호 약함이면 'no action — 이유' 로 Telegram. "
             f"중요: 분석 결과를 반드시 send_telegram 으로 보고하고 끝낼 것."
         )
+
+    # v6.51: 모드별 시스템 프롬프트 선택
+    system_text = {
+        "research": SYSTEM_PROMPT_RESEARCH,
+        "risk": SYSTEM_PROMPT_RISK,
+        "portfolio": SYSTEM_PROMPT_PORTFOLIO,
+    }.get(mode, SYSTEM_PROMPT)
 
     messages: list = [{"role": "user", "content": user_prompt}]
     model = os.environ.get("CLAUDE_AGENT_MODEL", "claude-sonnet-4-6")
@@ -646,7 +697,7 @@ def run_analysis(user_prompt: str | None = None) -> bool:
                 max_tokens=2000,
                 system=[{
                     "type": "text",
-                    "text": SYSTEM_PROMPT,
+                    "text": system_text,
                     "cache_control": {"type": "ephemeral"},
                 }],
                 tools=TOOLS,

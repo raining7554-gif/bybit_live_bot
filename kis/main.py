@@ -1215,6 +1215,170 @@ def main():
             traceback.print_exc()
             telegram.send(f"⚠️ /universe 오류: {type(e).__name__}: {e}")
 
+    def cmd_analyze():
+        """v6.51: 임의 종목 기술적 분석 (KR/US 자동 판별).
+        사용법: /analyze 005930 또는 /analyze NVDA
+        """
+        ticker = telegram._last_args.strip().upper() if telegram._last_args else ""
+        if not ticker:
+            telegram.send(
+                "사용법: <code>/analyze [티커]</code>\n"
+                "예) /analyze 005930 (KR)\n"
+                "     /analyze NVDA (US)"
+            )
+            return
+
+        # 시장 판별
+        is_kr = ticker.isdigit() and len(ticker) == 6
+        is_us = ticker.isalpha() and 1 <= len(ticker) <= 5
+
+        if not (is_kr or is_us):
+            telegram.send(f"⚠️ 인식 불가: <code>{ticker}</code>\n"
+                          f"KR: 6자리 숫자 / US: 1~5자 알파벳")
+            return
+
+        telegram.send(f"📊 {ticker} 분석 중...")
+
+        try:
+            from strategy_clenow_kr import get_kr_daily, _sma
+            from strategy_overseas import get_overseas_daily
+
+            if is_kr:
+                candles = get_kr_daily(ticker, count=210, market_code="J")
+                market_label = "🇰🇷 KR"
+                cur_symbol = "₩"
+            else:
+                # US: NAS / NYS / AMS 자동 fallback (get_overseas_daily 가 처리)
+                candles = get_overseas_daily(ticker, "NAS", count=210)
+                market_label = "🇺🇸 US"
+                cur_symbol = "$"
+
+            if len(candles) < 30:
+                telegram.send(f"⚠️ {ticker} 일봉 데이터 부족 ({len(candles)}일)")
+                return
+
+            closes = [c["close"] for c in candles]
+            highs = [c["high"] for c in candles]
+            lows = [c["low"] for c in candles]
+            vols = [c.get("volume", 0) for c in candles]
+            today = closes[0]
+
+            ma20 = _sma(closes, 20)
+            ma50 = _sma(closes, 50)
+            ma200 = _sma(closes, 200) if len(closes) >= 200 else 0
+
+            # RSI 14
+            gains, losses = [], []
+            for i in range(14):
+                if i + 1 < len(closes):
+                    diff = closes[i] - closes[i + 1]
+                    gains.append(max(diff, 0))
+                    losses.append(max(-diff, 0))
+            ag = sum(gains) / 14 if gains else 0
+            al = sum(losses) / 14 if losses else 0
+            rsi = 100 - 100 / (1 + ag / al) if al > 0 else 50
+
+            # BB (20, 2)
+            sma20 = ma20
+            if len(closes) >= 20:
+                var = sum((c - sma20) ** 2 for c in closes[:20]) / 20
+                std = var ** 0.5
+                bb_upper = sma20 + 2 * std
+                bb_lower = sma20 - 2 * std
+                bb_pos = (today - bb_lower) / (bb_upper - bb_lower) if bb_upper > bb_lower else 0.5
+            else:
+                bb_upper = bb_lower = today
+                bb_pos = 0.5
+
+            # 20일 고점/저점
+            high_20 = max(highs[:20]) if len(highs) >= 20 else today
+            low_20 = min(lows[:20]) if len(lows) >= 20 else today
+
+            # 거래량 비율
+            avg_vol = sum(vols[1:21]) / 20 if len(vols) >= 21 else (sum(vols) / max(len(vols), 1))
+            today_vol = vols[0]
+            vol_ratio = today_vol / avg_vol if avg_vol > 0 else 1.0
+
+            # ATR 14
+            trs = []
+            for i in range(min(14, len(candles) - 1)):
+                h = highs[i]
+                low = lows[i]
+                pc = closes[i + 1] if i + 1 < len(closes) else closes[i]
+                trs.append(max(h - low, abs(h - pc), abs(low - pc)))
+            atr = sum(trs) / len(trs) if trs else 0
+            atr_pct = (atr / today * 100) if today > 0 else 0
+
+            # 추세 평가
+            if ma200 > 0 and ma50 > ma200 and today > ma50:
+                trend_label = "🟢 강세 (정배열)"
+            elif today > ma50:
+                trend_label = "🟡 단기강세"
+            elif today < ma50 and ma50 < ma200:
+                trend_label = "🔴 약세 (역배열)"
+            else:
+                trend_label = "⚪ 혼조"
+
+            # RSI 평가
+            if rsi >= 70:
+                rsi_label = "🔥 과열"
+            elif rsi >= 50:
+                rsi_label = "🟢 양호"
+            elif rsi >= 30:
+                rsi_label = "🟡 약세"
+            else:
+                rsi_label = "❄️ 과매도"
+
+            # 포맷
+            def fmt_price(p):
+                if is_kr:
+                    return f"₩{p:,.0f}"
+                return f"${p:.2f}"
+
+            ma200_str = fmt_price(ma200) if ma200 > 0 else "N/A"
+            lines = [
+                f"📊 <b>{ticker} 분석</b> {market_label}",
+                f"━━━━━━━━━━━━━━",
+                f"현재가: {fmt_price(today)}",
+                f"추세: {trend_label}",
+                f"  MA20  {fmt_price(ma20)}",
+                f"  MA50  {fmt_price(ma50)}",
+                f"  MA200 {ma200_str}",
+                f"",
+                f"RSI(14): {rsi:.0f} {rsi_label}",
+                f"BB pos: {bb_pos:.2f} ({fmt_price(bb_lower)} ~ {fmt_price(bb_upper)})",
+                f"ATR(14): {atr_pct:.2f}% (변동성)",
+                f"",
+                f"20일 고가: {fmt_price(high_20)}",
+                f"20일 저가: {fmt_price(low_20)}",
+                f"거래량: {vol_ratio:.2f}x 평균",
+            ]
+
+            # AI 분석 (선택)
+            if _agent is not None:
+                try:
+                    from intelligence import agent as _ag
+                    if not _ag._quota_state.get("exhausted"):
+                        ai_prompt = (
+                            f"한국어 1-2 문장으로 종목 {ticker} 단기 매수 매력도 평가.\n"
+                            f"가격 {today:.2f}, MA20 {ma20:.2f}, MA50 {ma50:.2f}, "
+                            f"MA200 {ma200:.2f}, RSI {rsi:.0f}, BB pos {bb_pos:.2f}, "
+                            f"ATR {atr_pct:.2f}%, 거래량 {vol_ratio:.2f}x.\n"
+                            f"매수/관망/매도 한 단어 권고 포함."
+                        )
+                        text, err = _ag._call_gemini(ai_prompt, timeout=10)
+                        if text:
+                            lines.append("")
+                            lines.append(f"🧠 <b>AI 평가</b>: {text[:200]}")
+                except Exception:
+                    pass
+
+            telegram.send("\n".join(lines))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            telegram.send(f"⚠️ /analyze 오류: {type(e).__name__}: {e}")
+
     cmd_handlers = {
         "/review":  cmd_review,
         "/lessons": cmd_lessons,
@@ -1226,6 +1390,7 @@ def main():
         "/test_us": cmd_test_us,
         "/sync_us": cmd_sync_us,
         "/universe": cmd_universe,
+        "/analyze": cmd_analyze,
     }
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
