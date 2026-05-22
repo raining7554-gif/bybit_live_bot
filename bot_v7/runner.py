@@ -738,6 +738,105 @@ def _setup_handlers():
             print(f"[agent_cmd err] {_tb.format_exc()}", flush=True)
             tg.send(f"⚠️ Claude Agent 예외:\n{err}\n(전체 traceback 은 Railway 로그)")
 
+    def research_cmd():
+        """v6.51: Research 전문 에이전트 — 가설 + 백테스트 실험."""
+        if not claude_agent._enabled():
+            tg.send("⚠️ ANTHROPIC_API_KEY 미설정")
+            return
+        tg.send("🔬 Research Agent 시작 (백테스트 가설 실험)...")
+        try:
+            claude_agent.run_analysis(
+                user_prompt="새 패턴 / 미테스트 가설 찾고 백테스트 실험 PR 생성. 라이브 변경 X.",
+                mode="research",
+            )
+        except Exception as e:
+            tg.send(f"⚠️ Research 오류: {type(e).__name__}: {e}")
+
+    def risk_cmd():
+        """v6.51: Risk 전문 에이전트 — 노출/drawdown 모니터링."""
+        if not claude_agent._enabled():
+            tg.send("⚠️ ANTHROPIC_API_KEY 미설정")
+            return
+        tg.send("🛡️ Risk Agent 시작 (포지션/노출 점검)...")
+        try:
+            claude_agent.run_analysis(
+                user_prompt="현재 포지션 + 7일 PnL 기준 위험 평가. 🟢/🟡/🔴 등급 + 조치 제안.",
+                mode="risk",
+            )
+        except Exception as e:
+            tg.send(f"⚠️ Risk 오류: {type(e).__name__}: {e}")
+
+    def portfolio_cmd():
+        """v6.51: Portfolio 전문 에이전트 — 자본 배분 분석."""
+        if not claude_agent._enabled():
+            tg.send("⚠️ ANTHROPIC_API_KEY 미설정")
+            return
+        tg.send("📈 Portfolio Agent 시작 (전략/심볼 배분 분석)...")
+        try:
+            claude_agent.run_analysis(
+                user_prompt="D / D_INV / MR 전략별 + 심볼별 30일 성과 비교. 자본 배분 권고.",
+                mode="portfolio",
+            )
+        except Exception as e:
+            tg.send(f"⚠️ Portfolio 오류: {type(e).__name__}: {e}")
+
+    def analyze_cmd():
+        """v6.51: 임의 crypto 심볼 기술적 분석.
+        사용법: /analyze BTC 또는 /analyze ETHUSDT
+        """
+        sym = tg._last_args.strip().upper() if tg._last_args else ""
+        if not sym:
+            tg.send("사용법: /analyze [심볼]\n예: /analyze BTC 또는 /analyze SOLUSDT")
+            return
+        if not sym.endswith("USDT") and not sym.endswith("USD"):
+            sym = sym + "USDT"
+
+        tg.send(f"📊 {sym} 분석 중...")
+        try:
+            df15 = ex.get_ohlcv_cached(sym, "15", 200)
+            df1h = ex.get_ohlcv_cached(sym, "60", 200)
+            df4h = ex.get_ohlcv_cached(sym, "240", 200)
+            if len(df15) < 50:
+                tg.send(f"⚠️ {sym} 데이터 부족")
+                return
+            df15, df1h, df4h = strat.compute_indicators(df15, df1h, df4h)
+            r15 = df15.iloc[-1]
+            r1h = df1h.iloc[-1]
+            r4h = df4h.iloc[-1]
+            price = float(r15.close)
+
+            lines = [
+                f"📊 <b>{sym} 분석</b>",
+                f"━━━━━━━━━━━━━━",
+                f"현재가: ${price:,.2f}",
+                f"",
+                f"<b>4H</b>",
+                f"  ADX {float(r4h.adx):.0f} | EMA50 ${float(r4h.ema50):,.0f}",
+                f"  종가 vs EMA50: {((price - r4h.ema50) / r4h.ema50 * 100):+.2f}%",
+                f"",
+                f"<b>1H</b>",
+                f"  ADX {float(r1h.adx):.0f} | RSI {float(r1h.rsi):.0f}",
+                f"  BB pos {float(r1h.bb_pos):.2f}",
+                f"",
+                f"<b>15m</b>",
+                f"  ADX {float(r15.adx):.0f} | RSI {float(r15.rsi):.0f}",
+                f"  BB pos {float(r15.bb_pos):.2f} | ATR {float(r15.atr_pct)*100:.2f}%",
+            ]
+
+            # 종합 평가
+            trend_4h = "강세" if r4h.adx > 25 and price > r4h.ema50 else \
+                       "약세" if r4h.adx > 25 and price < r4h.ema50 else "약함"
+            mr_setup = "✓" if r15.adx < 32 and (r15.bb_pos < 0.2 or r15.bb_pos > 0.8) else "✗"
+            lines.append("")
+            lines.append(f"4H 추세: {trend_4h}")
+            lines.append(f"MR setup (15m): {mr_setup}")
+
+            tg.send("\n".join(lines))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            tg.send(f"⚠️ /analyze 오류: {type(e).__name__}: {e}")
+
     def agent_ping_cmd():
         """v6.46: 간단 Anthropic API ping (도구/분석 없음, 연결만 검증)."""
         tg.send("🏓 Anthropic API ping 시작...")
@@ -816,6 +915,10 @@ def _setup_handlers():
         "/regime":  regime_cmd,
         "/agent":   agent_cmd,
         "/agent_ping": agent_ping_cmd,
+        "/research": research_cmd,
+        "/risk":   risk_cmd,
+        "/portfolio": portfolio_cmd,
+        "/analyze": analyze_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }

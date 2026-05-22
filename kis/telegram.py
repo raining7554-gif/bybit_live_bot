@@ -127,6 +127,23 @@ def _normalize(text: str) -> str:
     return head
 
 
+def _split_cmd_args(text: str) -> tuple[str, str]:
+    """v6.51: /cmd args 분리."""
+    text = text.strip()
+    if not text.startswith("/"):
+        return text, ""
+    parts = text.split(None, 1)
+    cmd = parts[0]
+    if "@" in cmd:
+        cmd = cmd.split("@", 1)[0]
+    args = parts[1] if len(parts) > 1 else ""
+    return cmd, args
+
+
+# v6.51: 마지막 명령의 args 저장 (handler 에서 telegram._last_args 로 접근)
+_last_args: str = ""
+
+
 def poll_commands(handlers: dict):
     """getUpdates 폴링 — handlers 는 {'/cmd': callable} 형식.
 
@@ -150,6 +167,11 @@ def poll_commands(handlers: dict):
             if chat_id and chat_id != str(TELEGRAM_CHAT_ID):
                 continue
             text = _normalize(msg.get("text", ""))
+            # v6.51: args 저장 (handler 에서 telegram._last_args 로 접근)
+            raw = msg.get("text", "")
+            _, args = _split_cmd_args(raw)
+            global _last_args
+            _last_args = args
             handler = handlers.get(text)
             if handler:
                 try:

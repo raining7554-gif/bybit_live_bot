@@ -80,6 +80,23 @@ def send_force(msg: str, parse_mode: Optional[str] = "HTML"):
     send(msg, parse_mode=parse_mode)
 
 
+def _split_cmd_args(text: str) -> tuple[str, str]:
+    """v6.51: /cmd args 분리."""
+    text = text.strip()
+    if not text.startswith("/"):
+        return text, ""
+    parts = text.split(None, 1)
+    cmd = parts[0]
+    if "@" in cmd:
+        cmd = cmd.split("@", 1)[0]
+    args = parts[1] if len(parts) > 1 else ""
+    return cmd, args
+
+
+# v6.51: 마지막 명령 args (handler 에서 notifier._last_args 로 접근)
+_last_args: str = ""
+
+
 def _normalize(text: str) -> str:
     """'/status@my_bot_username 인자' → '/status'."""
     text = text.strip()
@@ -121,6 +138,10 @@ def poll_commands(handlers: dict[str, Callable[[], None]]):
             from_user = msg.get("from", {}).get("username") or msg.get("from", {}).get("first_name", "?")
             raw_text = (msg.get("text") or "")
             text = _normalize(raw_text)
+            # v6.51: args 저장
+            _, _args = _split_cmd_args(raw_text)
+            global _last_args
+            _last_args = _args
             print(
                 f"[TG upd #{upd['update_id']}] from=@{from_user} chat={chat_id} "
                 f"text={raw_text[:80]!r} → normalized={text!r}",
