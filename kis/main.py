@@ -1392,6 +1392,61 @@ def main():
         "/universe": cmd_universe,
         "/analyze": cmd_analyze,
     }
+
+    # v6.52: KIS Multi-agent — Bybit 와 동일 패턴
+    try:
+        import claude_agent as kis_agent
+
+        def cmd_kis_agent():
+            if not kis_agent._enabled():
+                telegram.send("⚠️ ANTHROPIC_API_KEY 미설정 (KIS Railway env 확인)")
+                return
+            telegram.send("🤖 KIS Claude Agent 분석 시작 (1~3분)...")
+            try:
+                kis_agent.run_analysis()
+            except Exception as e:
+                telegram.send(f"⚠️ Agent 오류: {type(e).__name__}: {e}")
+
+        def cmd_kis_research():
+            telegram.send("🔬 KIS Research Agent 시작...")
+            try:
+                kis_agent.run_analysis(
+                    user_prompt="KIS 양봇 (kr_clenow + us_swing) 7일 패턴 분석. "
+                                "Clenow 파라미터 / US Swing 진입조건 개선 가설 + PR.",
+                    mode="research",
+                )
+            except Exception as e:
+                telegram.send(f"⚠️ Research 오류: {type(e).__name__}: {e}")
+
+        def cmd_kis_risk():
+            telegram.send("🛡️ KIS Risk Agent 시작...")
+            try:
+                kis_agent.run_analysis(
+                    user_prompt="현재 KIS KR + US 보유 + 7일 PnL 위험 평가. "
+                                "🟢🟡🔴 등급 + 권고. 집중도/drawdown 위주.",
+                    mode="risk",
+                )
+            except Exception as e:
+                telegram.send(f"⚠️ Risk 오류: {type(e).__name__}: {e}")
+
+        def cmd_kis_portfolio():
+            telegram.send("📈 KIS Portfolio Agent 시작...")
+            try:
+                kis_agent.run_analysis(
+                    user_prompt="KR Clenow vs US Swing 30일 성과 비교 + "
+                                "KOSPI/QQQ 시장 환경 + 자본 배분 권고.",
+                    mode="portfolio",
+                )
+            except Exception as e:
+                telegram.send(f"⚠️ Portfolio 오류: {type(e).__name__}: {e}")
+
+        cmd_handlers["/agent"] = cmd_kis_agent
+        cmd_handlers["/research"] = cmd_kis_research
+        cmd_handlers["/risk"] = cmd_kis_risk
+        cmd_handlers["/portfolio"] = cmd_kis_portfolio
+        print("[MAIN] KIS Multi-agent 명령 등록됨 (/agent /research /risk /portfolio)")
+    except ImportError as e:
+        print(f"[MAIN] KIS claude_agent 임포트 실패: {e}")
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
     last_news_report_kst_date = ""  # v5.0: 09:00 KST 시장 뉴스 (일 1회)
