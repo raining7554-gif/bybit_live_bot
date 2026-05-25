@@ -73,6 +73,12 @@ ENTRY_MIN_SCORE   = 55.0
 # 70 점 이상은 추세 끝물 잡는 패턴 가설로 long ↔ short 반전
 # 환경변수로 임계치 조정 가능 (200 = 비활성)
 D_INVERSE_THRESHOLD = float(os.environ.get("D_INVERSE_THRESHOLD", "65"))
+
+# v6.54: mid/high tier (점수 80+) 사이즈 캡
+# 데이터 (30일): mid 10건 -$98 / high 6건 -$74 = 16건 -$172
+# 점수-승률 무상관 (-0.2) → 큰 사이즈 진입이 손실 증폭
+# True 면 80+ 점수도 base tier (10x/50%) 사이즈 적용
+TIER_CAP_ENABLED = os.environ.get("TIER_CAP_ENABLED", "true").lower() == "true"
 SCORE_TIER_MICRO  = 60.0   # 55..59 → 3x
 SCORE_TIER_PROBE  = 70.0   # 60..69 → 5x
 SCORE_TIER_BASE   = 80.0   # 70..79 → 10x
