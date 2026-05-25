@@ -208,7 +208,9 @@ AI_REGIME_DEEP_INTERVAL_SEC = int(os.environ.get("AI_REGIME_DEEP_INTERVAL_SEC", 
 # 필수 env: ANTHROPIC_API_KEY (https://console.anthropic.com)
 # 선택 env: GH_PAT (PR 생성용 GitHub Personal Access Token)
 CLAUDE_AGENT_ENABLED = os.environ.get("CLAUDE_AGENT_ENABLED", "true").lower() == "true"
-CLAUDE_AGENT_INTERVAL_SEC = int(os.environ.get("CLAUDE_AGENT_INTERVAL_SEC", "3600"))  # 1시간
+# v6.55: 시간별 → 6시간 간격 (비용 절감, 사용자 요청)
+# 24 사이클/일 × multi-iteration = 너무 빠른 소진 → 4 사이클/일로
+CLAUDE_AGENT_INTERVAL_SEC = int(os.environ.get("CLAUDE_AGENT_INTERVAL_SEC", "21600"))  # 6시간
 CLAUDE_AGENT_MODEL = os.environ.get("CLAUDE_AGENT_MODEL", "claude-sonnet-4-6")
 
 # Refresh OHLCV cache every N seconds within a loop iteration (avoid spam)
