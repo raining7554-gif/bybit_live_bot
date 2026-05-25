@@ -137,6 +137,12 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
         return None
 
     tier = tier_for_score(score)
+    # v6.54: mid/high tier 캡 — 점수 80+ 도 base 사이즈로 제한
+    # 데이터: mid 10건 -$98 / high 6건 -$74 (16건 -$172, 점수-승률 무상관)
+    # 큰 사이즈 손실 차단. 진입 신호는 유지하되 base (10x/50%) 사이즈.
+    if cfg.TIER_CAP_ENABLED and tier in ("mid", "high"):
+        tier = "base"
+        lev = cfg.LEV_TIER_BASE
     tp_margin = _tp_margin_for_tier(tier)
 
     return {
