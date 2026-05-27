@@ -52,6 +52,7 @@ def _fetch_overseas_chunk(ticker: str, exchange: str, end_yyyymmdd: str = "") ->
                     continue
                 out.append({
                     "date": o.get("xymd", ""),
+                    "open": float(o.get("open", 0)),
                     "close": close,
                     "high": float(o.get("high", 0)),
                     "low": float(o.get("low", 0)),
