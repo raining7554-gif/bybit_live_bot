@@ -293,7 +293,45 @@ def chart_analysis(candles: list, ticker: str = "", is_crypto: bool = False,
     else:
         lines.append("중립 — 구름/MA 돌파 방향 확인 후 진입")
 
-    # ── v6.59: 손절/익절 R:R 분석 ──────────
+    # ── v6.60: 진입 타이밍 분석 ──────────
+    # RSI, BB pos, MA20 거리 기반
+    if n >= 20:
+        var = sum((c - ma20) ** 2 for c in closes[-20:]) / 20
+        std = var ** 0.5
+        bb_up = ma20 + 2 * std
+        bb_lo = ma20 - 2 * std
+        bb_pos = (cur - bb_lo) / (bb_up - bb_lo) if bb_up > bb_lo else 0.5
+        # RSI
+        gains = [max(closes[i] - closes[i-1], 0) for i in range(n-14, n) if i > 0]
+        losses = [max(closes[i-1] - closes[i], 0) for i in range(n-14, n) if i > 0]
+        ag = sum(gains) / 14 if gains else 0
+        al = sum(losses) / 14 if losses else 0
+        rsi = 100 - 100 / (1 + ag / al) if al > 0 else 50
+        ma20_dist = (cur - ma20) / ma20 * 100 if ma20 > 0 else 0
+
+        lines.append("\n<b>⏱️ 진입 타이밍</b> (long 기준)")
+        if rsi > 72:
+            lines.append(f"• RSI {rsi:.0f} 과열 → 🔴 풀백 대기 (MA20 {fmt(ma20)} 근처)")
+        elif rsi < 35:
+            lines.append(f"• RSI {rsi:.0f} 과매도 → 반등 신호 확인 후 (위험)")
+        elif ma20_dist > 6:
+            lines.append(f"• 가격 MA20 대비 +{ma20_dist:.1f}% 확장 → 🟡 풀백 대기 권장")
+        elif bull_signals >= 3 and 0 <= ma20_dist <= 3:
+            lines.append(f"• 강세 + MA20 근접 ({ma20_dist:+.1f}%) → 🟢 진입 양호")
+        elif bull_signals >= 3 and bb_pos < 0.4:
+            lines.append(f"• 강세 + BB 하단 풀백 (pos {bb_pos:.2f}) → 🟢 좋은 진입점")
+        elif bull_signals <= 1:
+            lines.append(f"• 약세 구조 → ⚪ 진입 보류, 추세 전환 대기")
+        else:
+            lines.append(f"• 중립 (RSI {rsi:.0f}, MA20 {ma20_dist:+.1f}%) → 돌파 확인 후")
+
+        # 이상적 진입 가격대 제안
+        if bull_signals >= 2:
+            ideal_low = ma20
+            ideal_high = ma20 * 1.02
+            lines.append(f"• 이상 진입대: {fmt(ideal_low)} ~ {fmt(ideal_high)} (MA20 부근)")
+
+    # ── 손절/익절 R:R 분석 ──────────
     # ATR 계산 (자동 제안용)
     atr = 0
     if n >= 15:

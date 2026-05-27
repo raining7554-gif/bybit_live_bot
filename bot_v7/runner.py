@@ -805,6 +805,9 @@ def _setup_handlers():
             return
         if not sym.endswith("USDT") and not sym.endswith("USD"):
             sym = sym + "USDT"
+        # v6.60: 보유 포지션이면 진입가 자동
+        if entry == 0 and sym in _positions:
+            entry = float(_positions[sym].get("entry", 0))
         tg.send(f"📈 {sym} 차트 생성 중...")
         try:
             from . import chart as _chart
