@@ -415,6 +415,7 @@ def _fetch_kr_daily_chunk(ticker: str, market_code: str,
                     continue
                 out.append({
                     "date": o.get("stck_bsop_date", ""),
+                    "open": float(o.get("stck_oprc", 0)),
                     "close": close,
                     "high": float(o.get("stck_hgpr", 0)),
                     "low": float(o.get("stck_lwpr", 0)),

@@ -70,10 +70,16 @@ def make_chart(candles: list, title: str, is_crypto: bool = False) -> Optional[b
 
     # 오래된→최신 순서로 뒤집기 + 최근 120봉만
     data = list(reversed(candles[:120]))
-    opens = [float(c["open"]) for c in data]
+    # v6.57: open 누락/0 이면 직전 종가로 fallback
+    closes = [float(c["close"]) for c in data]
+    opens = []
+    for i, c in enumerate(data):
+        o = float(c.get("open", 0) or 0)
+        if o <= 0:
+            o = closes[i-1] if i > 0 else closes[i]
+        opens.append(o)
     highs = [float(c["high"]) for c in data]
     lows = [float(c["low"]) for c in data]
-    closes = [float(c["close"]) for c in data]
     n = len(closes)
     x = list(range(n))
 
