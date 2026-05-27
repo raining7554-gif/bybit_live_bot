@@ -1245,6 +1245,12 @@ def main():
             png = _chart.make_chart(candles, label, is_crypto=False)
             if png:
                 telegram.send_photo(png, caption=f"📈 {ticker} 일목균형표 + 추세선")
+                # v6.58: 차트 해설 + 단기/장기 분석
+                try:
+                    analysis = _chart.chart_analysis(candles, ticker, is_crypto=is_us)
+                    telegram.send_force(analysis)
+                except Exception as ae:
+                    print(f"[chart_analysis err] {ae}")
             else:
                 telegram.send("⚠️ 차트 생성 실패")
         except Exception as e:

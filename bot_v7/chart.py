@@ -155,3 +155,122 @@ def make_chart(candles: list, title: str, is_crypto: bool = False) -> Optional[b
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
+
+
+def chart_analysis(candles: list, ticker: str = "", is_crypto: bool = False) -> str:
+    """v6.58: 차트 해설 + 단기/장기 분석 텍스트.
+
+    범례 의미 + 일목 판정 + 단기/장기 현재가 위치 분석.
+    """
+    if len(candles) < 30:
+        return "데이터 부족"
+
+    data = list(reversed(candles[:120]))
+    closes = [float(c["close"]) for c in data]
+    highs = [float(c["high"]) for c in data]
+    lows = [float(c["low"]) for c in data]
+    n = len(closes)
+    cur = closes[-1]
+
+    ich = _ichimoku(highs, lows, closes)
+    tenkan = ich["tenkan"][-1]
+    kijun = ich["kijun"][-1]
+    span_a = ich["span_a"][-1]
+    span_b = ich["span_b"][-1]
+
+    def sma(vals, p):
+        return sum(vals[-p:]) / p if len(vals) >= p else 0
+    ma20 = sma(closes, 20)
+    ma50 = sma(closes, 50)
+    ma200 = sma(closes, 200) if n >= 200 else 0
+
+    def fmt(p):
+        if is_crypto or (ticker and ticker.isalpha()):
+            return f"${p:,.2f}"
+        return f"₩{p:,.0f}"
+
+    lines = [f"📊 <b>{ticker} 분석</b>"]
+
+    # ── 범례 설명 ──────────────────
+    lines.append("\n<b>📖 차트 범례</b>")
+    lines.append("🔵 Tenkan(9): 전환선 — 단기 추세")
+    lines.append("🟠 Kijun(26): 기준선 — 중기 추세")
+    lines.append("☁️ 구름대: 지지/저항 영역 (녹색=강세, 빨강=약세)")
+    lines.append("🔴 Resistance: 저항 추세선 (고점 연결)")
+    lines.append("🟢 Support: 지지 추세선 (저점 연결)")
+
+    # ── 일목 종합 판정 ──────────────
+    lines.append("\n<b>☁️ 일목균형표 판정</b>")
+    # 구름 대비 위치
+    if not (span_a != span_a or span_b != span_b):  # not NaN
+        cloud_top = max(span_a, span_b)
+        cloud_bot = min(span_a, span_b)
+        if cur > cloud_top:
+            lines.append(f"• 가격이 구름 <b>위</b> → 강세 ✅ (구름 상단 {fmt(cloud_top)} 지지)")
+        elif cur < cloud_bot:
+            lines.append(f"• 가격이 구름 <b>아래</b> → 약세 🔴 (구름 하단 {fmt(cloud_bot)} 저항)")
+        else:
+            lines.append(f"• 가격이 구름 <b>안</b> → 중립/방향 모색 ⚪")
+    # 전환선 vs 기준선
+    if tenkan == tenkan and kijun == kijun:
+        if tenkan > kijun:
+            lines.append(f"• 전환선 > 기준선 → 단기 매수 우위 🟢")
+        else:
+            lines.append(f"• 전환선 < 기준선 → 단기 매도 우위 🔴")
+
+    # ── 단기 분석 (전환선 / MA20) ────
+    lines.append("\n<b>📈 단기 (수일~2주)</b>")
+    if tenkan == tenkan:
+        diff = (cur - tenkan) / tenkan * 100
+        pos = "위" if cur > tenkan else "아래"
+        lines.append(f"• 전환선 {fmt(tenkan)} {pos} ({diff:+.1f}%)")
+    if ma20 > 0:
+        diff = (cur - ma20) / ma20 * 100
+        pos = "위" if cur > ma20 else "아래"
+        emoji = "🟢" if cur > ma20 else "🔴"
+        lines.append(f"• MA20 {fmt(ma20)} {pos} ({diff:+.1f}%) {emoji}")
+    # 단기 모멘텀 (최근 5봉)
+    if n >= 5:
+        chg5 = (cur - closes[-5]) / closes[-5] * 100
+        lines.append(f"• 최근 5봉 {chg5:+.1f}%")
+
+    # ── 장기 분석 (기준선 / MA50,200 / 구름) ──
+    lines.append("\n<b>📉 장기 (수주~수개월)</b>")
+    if ma50 > 0:
+        diff = (cur - ma50) / ma50 * 100
+        pos = "위" if cur > ma50 else "아래"
+        emoji = "🟢" if cur > ma50 else "🔴"
+        lines.append(f"• MA50 {fmt(ma50)} {pos} ({diff:+.1f}%) {emoji}")
+    if ma200 > 0:
+        diff = (cur - ma200) / ma200 * 100
+        pos = "위" if cur > ma200 else "아래"
+        emoji = "🟢" if cur > ma200 else "🔴"
+        lines.append(f"• MA200 {fmt(ma200)} {pos} ({diff:+.1f}%) {emoji}")
+        # 정배열 판정
+        if ma20 > ma50 > ma200:
+            lines.append("• <b>정배열</b> (MA20>50>200) → 강한 상승추세 ✅")
+        elif ma20 < ma50 < ma200:
+            lines.append("• <b>역배열</b> (MA20<50<200) → 강한 하락추세 🔴")
+        else:
+            lines.append("• 혼조 배열 → 방향성 불명확 ⚪")
+
+    # ── 종합 ──────────────────
+    lines.append("\n<b>🎯 종합</b>")
+    bull_signals = 0
+    if ma20 > 0 and cur > ma20:
+        bull_signals += 1
+    if ma50 > 0 and cur > ma50:
+        bull_signals += 1
+    if tenkan == tenkan and cur > tenkan:
+        bull_signals += 1
+    if not (span_a != span_a) and cur > max(span_a, span_b):
+        bull_signals += 1
+    if bull_signals >= 3:
+        lines.append("강세 우위 — 추세 추종 매수 관점")
+    elif bull_signals <= 1:
+        lines.append("약세 우위 — 반등 확인 전 관망")
+    else:
+        lines.append("중립 — 구름/MA 돌파 방향 확인 후 진입")
+
+    return "\n".join(lines)
+
