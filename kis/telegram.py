@@ -65,6 +65,26 @@ def send_force(message: str):
     _raw_send(message)
 
 
+def send_photo(image_bytes: bytes, caption: str = ""):
+    """v6.56: 차트 이미지 전송 (sendPhoto)."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[TG photo SKIP — no token/chat]", flush=True)
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+        files = {"photo": ("chart.png", image_bytes, "image/png")}
+        data = {"chat_id": TELEGRAM_CHAT_ID}
+        if caption:
+            data["caption"] = caption[:1000]
+        r = requests.post(url, data=data, files=files, timeout=20)
+        if r.status_code == 200:
+            print("[TG photo OK]", flush=True)
+        else:
+            print(f"[TG photo FAIL {r.status_code}] {r.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"[TG photo EXC] {type(e).__name__}: {e}", flush=True)
+
+
 def send_buy(ticker: str, name: str, price: int, qty: int, amount: int, reason: str):
     # 매수/매도는 실제 체결 이벤트라 dedup 최소화(30초)
     send(

@@ -80,6 +80,26 @@ def send_force(msg: str, parse_mode: Optional[str] = "HTML"):
     send(msg, parse_mode=parse_mode)
 
 
+def send_photo(image_bytes: bytes, caption: str = ""):
+    """v6.56: 차트 이미지 전송."""
+    if not cfg.TG_TOKEN or not cfg.TG_CHAT_ID:
+        print("[TG photo SKIP]", flush=True)
+        return
+    try:
+        url = f"https://api.telegram.org/bot{cfg.TG_TOKEN}/sendPhoto"
+        files = {"photo": ("chart.png", image_bytes, "image/png")}
+        data = {"chat_id": cfg.TG_CHAT_ID}
+        if caption:
+            data["caption"] = caption[:1000]
+        r = requests.post(url, data=data, files=files, timeout=20)
+        if r.status_code == 200:
+            print("[TG photo OK]", flush=True)
+        else:
+            print(f"[TG photo FAIL {r.status_code}] {r.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"[TG photo EXC] {type(e).__name__}: {e}", flush=True)
+
+
 def _split_cmd_args(text: str) -> tuple[str, str]:
     """v6.51: /cmd args 분리."""
     text = text.strip()
