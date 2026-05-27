@@ -807,6 +807,12 @@ def _setup_handlers():
                                     is_crypto=True)
             if png:
                 tg.send_photo(png, caption=f"📈 {sym} 일목균형표 + 추세선 (4H)")
+                # v6.58: 해설 + 단기/장기 분석
+                try:
+                    analysis = _chart.chart_analysis(candles, sym, is_crypto=True)
+                    tg.send_force(analysis)
+                except Exception as ae:
+                    print(f"[chart_analysis err] {ae}", flush=True)
             else:
                 tg.send("⚠️ 차트 생성 실패")
         except Exception as e:
