@@ -60,10 +60,12 @@ def _find_pivots(values, window=5, kind="high"):
     return pivots
 
 
-def make_chart(candles: list, title: str, is_crypto: bool = False) -> Optional[bytes]:
+def make_chart(candles: list, title: str, is_crypto: bool = False,
+               entry: float = 0, sl: float = 0, tp: float = 0) -> Optional[bytes]:
     """차트 PNG bytes 생성.
 
     candles: 최신순 (candles[0] = 오늘). open/high/low/close 키.
+    v6.59: entry/sl/tp 지정시 수평선 그림.
     """
     if len(candles) < 30:
         return None
@@ -143,6 +145,23 @@ def make_chart(candles: list, title: str, is_crypto: bool = False) -> Optional[b
     ax.grid(True, alpha=0.15)
     ax.set_xlim(-1, n)
 
+    # v6.59: 진입/손절/익절 수평선
+    if entry > 0:
+        ax.axhline(entry, color="#424242", linewidth=1.3, linestyle="-", alpha=0.8)
+        ax.annotate(f"Entry {entry:,.2f}", xy=(0, entry), fontsize=8,
+                    color="#424242", fontweight="bold",
+                    xytext=(2, 3), textcoords="offset points")
+    if sl > 0:
+        ax.axhline(sl, color="#d50000", linewidth=1.3, linestyle="-", alpha=0.8)
+        ax.annotate(f"SL {sl:,.2f}", xy=(0, sl), fontsize=8,
+                    color="#d50000", fontweight="bold",
+                    xytext=(2, 3), textcoords="offset points")
+    if tp > 0:
+        ax.axhline(tp, color="#00c853", linewidth=1.3, linestyle="-", alpha=0.8)
+        ax.annotate(f"TP {tp:,.2f}", xy=(0, tp), fontsize=8,
+                    color="#00c853", fontweight="bold",
+                    xytext=(2, 3), textcoords="offset points")
+
     # 현재가 표시
     cur = closes[-1]
     ax.annotate(f"{cur:,.2f}", xy=(n-1, cur), fontsize=9,
@@ -157,10 +176,12 @@ def make_chart(candles: list, title: str, is_crypto: bool = False) -> Optional[b
     return buf.getvalue()
 
 
-def chart_analysis(candles: list, ticker: str = "", is_crypto: bool = False) -> str:
-    """v6.58: 차트 해설 + 단기/장기 분석 텍스트.
+def chart_analysis(candles: list, ticker: str = "", is_crypto: bool = False,
+                   entry: float = 0, sl: float = 0, tp: float = 0) -> str:
+    """v6.58/6.59: 차트 해설 + 단기/장기 분석 + 손절/익절 R:R.
 
     범례 의미 + 일목 판정 + 단기/장기 현재가 위치 분석.
+    entry/sl/tp 지정시 R:R 계산 포함.
     """
     if len(candles) < 30:
         return "데이터 부족"
@@ -271,6 +292,45 @@ def chart_analysis(candles: list, ticker: str = "", is_crypto: bool = False) -> 
         lines.append("약세 우위 — 반등 확인 전 관망")
     else:
         lines.append("중립 — 구름/MA 돌파 방향 확인 후 진입")
+
+    # ── v6.59: 손절/익절 R:R 분석 ──────────
+    # ATR 계산 (자동 제안용)
+    atr = 0
+    if n >= 15:
+        trs = []
+        for i in range(n - 14, n):
+            if i > 0:
+                trs.append(max(highs[i] - lows[i],
+                               abs(highs[i] - closes[i-1]),
+                               abs(lows[i] - closes[i-1])))
+        atr = sum(trs) / len(trs) if trs else 0
+
+    if entry > 0 or sl > 0 or tp > 0:
+        lines.append("\n<b>💰 손절/익절</b>")
+        e = entry if entry > 0 else cur
+        if entry > 0:
+            lines.append(f"• 진입: {fmt(entry)}")
+        if sl > 0:
+            risk = (e - sl) / e * 100
+            lines.append(f"• 손절: {fmt(sl)} ({risk:+.1f}%)")
+        if tp > 0:
+            reward = (tp - e) / e * 100
+            lines.append(f"• 익절: {fmt(tp)} ({reward:+.1f}%)")
+        if sl > 0 and tp > 0 and e != sl:
+            rr = abs(tp - e) / abs(e - sl)
+            rr_emoji = "✅" if rr >= 2 else "🟡" if rr >= 1.5 else "🔴"
+            lines.append(f"• <b>R:R = 1:{rr:.1f}</b> {rr_emoji}")
+            if rr < 1.5:
+                lines.append("  ⚠️ R:R 낮음 — 익절 늘리거나 손절 좁히기 권장")
+    elif atr > 0:
+        # 자동 제안 (현재가 기준 long 가정)
+        lines.append("\n<b>💡 자동 손절/익절 제안</b> (현재가 기준 long)")
+        sug_sl = cur - 1.5 * atr
+        sug_tp = cur + 3.0 * atr  # 2:1 R:R
+        lines.append(f"• 손절 (−1.5×ATR): {fmt(sug_sl)} ({-1.5*atr/cur*100:.1f}%)")
+        lines.append(f"• 익절 (+3×ATR): {fmt(sug_tp)} ({3*atr/cur*100:+.1f}%)")
+        lines.append(f"• R:R = 1:2.0 ✅")
+        lines.append(f"  <i>/chart {ticker} {cur:.0f} {sug_sl:.0f} {sug_tp:.0f} 로 라인 표시</i>")
 
     return "\n".join(lines)
 

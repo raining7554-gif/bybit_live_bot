@@ -781,10 +781,27 @@ def _setup_handlers():
             tg.send(f"⚠️ Portfolio 오류: {type(e).__name__}: {e}")
 
     def chart_cmd():
-        """v6.56: 일목균형표 + 추세선 차트 이미지 (crypto)."""
-        sym = tg._last_args.strip().upper() if tg._last_args else ""
+        """v6.56/6.59: 일목 + 추세선 + 손절/익절 (crypto).
+        /chart BTC  또는  /chart BTC 60000 58000 65000 (진입/손절/익절)
+        """
+        raw = tg._last_args.strip() if tg._last_args else ""
+        parts = raw.split()
+        sym = parts[0].upper() if parts else ""
+        entry = sl = tp = 0.0
+        nums = []
+        for p in parts[1:]:
+            try:
+                nums.append(float(p.replace(",", "")))
+            except ValueError:
+                pass
+        if len(nums) >= 1:
+            entry = nums[0]
+        if len(nums) >= 2:
+            sl = nums[1]
+        if len(nums) >= 3:
+            tp = nums[2]
         if not sym:
-            tg.send("사용법: /chart [심볼]\n예: /chart BTC")
+            tg.send("사용법: /chart BTC\n라인: /chart BTC 60000 58000 65000 (진입 손절 익절)")
             return
         if not sym.endswith("USDT") and not sym.endswith("USD"):
             sym = sym + "USDT"
@@ -804,12 +821,13 @@ def _setup_handlers():
                     "low": float(r["low"]), "close": float(r["close"]),
                 })
             png = _chart.make_chart(candles, f"{sym} 4H — Ichimoku + Trendlines",
-                                    is_crypto=True)
+                                    is_crypto=True, entry=entry, sl=sl, tp=tp)
             if png:
                 tg.send_photo(png, caption=f"📈 {sym} 일목균형표 + 추세선 (4H)")
-                # v6.58: 해설 + 단기/장기 분석
+                # v6.58/6.59: 해설 + 단기/장기 + 손절/익절 R:R
                 try:
-                    analysis = _chart.chart_analysis(candles, sym, is_crypto=True)
+                    analysis = _chart.chart_analysis(candles, sym, is_crypto=True,
+                                                     entry=entry, sl=sl, tp=tp)
                     tg.send_force(analysis)
                 except Exception as ae:
                     print(f"[chart_analysis err] {ae}", flush=True)

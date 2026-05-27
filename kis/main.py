@@ -1216,12 +1216,31 @@ def main():
             telegram.send(f"⚠️ /universe 오류: {type(e).__name__}: {e}")
 
     def cmd_chart():
-        """v6.56: 일목균형표 + 추세선 차트 이미지.
-        사용법: /chart 005930 또는 /chart NVDA
+        """v6.56/6.59: 일목균형표 + 추세선 + 손절/익절 라인.
+        사용법: /chart 005930
+                /chart NVDA 130 125 140  (진입/손절/익절)
         """
-        ticker = telegram._last_args.strip().upper() if telegram._last_args else ""
+        raw = telegram._last_args.strip() if telegram._last_args else ""
+        parts = raw.split()
+        ticker = parts[0].upper() if parts else ""
+        # v6.59: 추가 숫자 = entry / sl / tp
+        entry = sl = tp = 0.0
+        nums = []
+        for p in parts[1:]:
+            try:
+                nums.append(float(p.replace(",", "")))
+            except ValueError:
+                pass
+        if len(nums) >= 1:
+            entry = nums[0]
+        if len(nums) >= 2:
+            sl = nums[1]
+        if len(nums) >= 3:
+            tp = nums[2]
         if not ticker:
-            telegram.send("사용법: /chart [티커]\n예) /chart 005930 또는 /chart NVDA")
+            telegram.send("사용법: /chart [티커]\n"
+                          "기본: /chart 005930\n"
+                          "라인: /chart NVDA 130 125 140 (진입 손절 익절)")
             return
         is_kr = ticker.isdigit() and len(ticker) == 6
         is_us = ticker.isalpha() and 1 <= len(ticker) <= 5
@@ -1242,12 +1261,14 @@ def main():
             if len(candles) < 60:
                 telegram.send(f"⚠️ {ticker} 데이터 부족 ({len(candles)}일)")
                 return
-            png = _chart.make_chart(candles, label, is_crypto=False)
+            png = _chart.make_chart(candles, label, is_crypto=False,
+                                    entry=entry, sl=sl, tp=tp)
             if png:
                 telegram.send_photo(png, caption=f"📈 {ticker} 일목균형표 + 추세선")
-                # v6.58: 차트 해설 + 단기/장기 분석
+                # v6.58/6.59: 해설 + 단기/장기 + 손절/익절 R:R
                 try:
-                    analysis = _chart.chart_analysis(candles, ticker, is_crypto=is_us)
+                    analysis = _chart.chart_analysis(candles, ticker, is_crypto=is_us,
+                                                     entry=entry, sl=sl, tp=tp)
                     telegram.send_force(analysis)
                 except Exception as ae:
                     print(f"[chart_analysis err] {ae}")
