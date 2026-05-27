@@ -1247,7 +1247,17 @@ def main():
         if not (is_kr or is_us):
             telegram.send(f"⚠️ 인식 불가: {ticker}")
             return
-        telegram.send(f"📈 {ticker} 차트 생성 중 (~30초)...")
+
+        # v6.60: 보유 종목이면 매수가 자동 entry 설정 (사용자가 안 줬을 때)
+        held_note = ""
+        if entry == 0:
+            held = dom_pos.get(ticker) or os_pos.get(ticker)
+            if held:
+                entry = float(held.get("buy_price", 0))
+                qty = held.get("qty", 0)
+                held_note = f" (보유중 {qty}주 @ {entry})"
+
+        telegram.send(f"📈 {ticker} 차트 생성 중 (~30초)...{held_note}")
         try:
             import chart as _chart
             from strategy_clenow_kr import get_kr_daily
