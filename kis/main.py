@@ -1215,6 +1215,43 @@ def main():
             traceback.print_exc()
             telegram.send(f"⚠️ /universe 오류: {type(e).__name__}: {e}")
 
+    def cmd_chart():
+        """v6.56: 일목균형표 + 추세선 차트 이미지.
+        사용법: /chart 005930 또는 /chart NVDA
+        """
+        ticker = telegram._last_args.strip().upper() if telegram._last_args else ""
+        if not ticker:
+            telegram.send("사용법: /chart [티커]\n예) /chart 005930 또는 /chart NVDA")
+            return
+        is_kr = ticker.isdigit() and len(ticker) == 6
+        is_us = ticker.isalpha() and 1 <= len(ticker) <= 5
+        if not (is_kr or is_us):
+            telegram.send(f"⚠️ 인식 불가: {ticker}")
+            return
+        telegram.send(f"📈 {ticker} 차트 생성 중 (~30초)...")
+        try:
+            import chart as _chart
+            from strategy_clenow_kr import get_kr_daily
+            from strategy_overseas import get_overseas_daily
+            if is_kr:
+                candles = get_kr_daily(ticker, count=180, market_code="J")
+                label = f"{ticker} (KR) — Ichimoku + Trendlines"
+            else:
+                candles = get_overseas_daily(ticker, "NAS", count=180)
+                label = f"{ticker} (US) — Ichimoku + Trendlines"
+            if len(candles) < 60:
+                telegram.send(f"⚠️ {ticker} 데이터 부족 ({len(candles)}일)")
+                return
+            png = _chart.make_chart(candles, label, is_crypto=False)
+            if png:
+                telegram.send_photo(png, caption=f"📈 {ticker} 일목균형표 + 추세선")
+            else:
+                telegram.send("⚠️ 차트 생성 실패")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            telegram.send(f"⚠️ /chart 오류: {type(e).__name__}: {e}")
+
     def cmd_analyze():
         """v6.51: 임의 종목 기술적 분석 (KR/US 자동 판별).
         사용법: /analyze 005930 또는 /analyze NVDA
@@ -1391,6 +1428,7 @@ def main():
         "/sync_us": cmd_sync_us,
         "/universe": cmd_universe,
         "/analyze": cmd_analyze,
+        "/chart": cmd_chart,
     }
 
     # v6.52: KIS Multi-agent — Bybit 와 동일 패턴

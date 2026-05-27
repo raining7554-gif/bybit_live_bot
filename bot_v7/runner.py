@@ -780,6 +780,40 @@ def _setup_handlers():
         except Exception as e:
             tg.send(f"⚠️ Portfolio 오류: {type(e).__name__}: {e}")
 
+    def chart_cmd():
+        """v6.56: 일목균형표 + 추세선 차트 이미지 (crypto)."""
+        sym = tg._last_args.strip().upper() if tg._last_args else ""
+        if not sym:
+            tg.send("사용법: /chart [심볼]\n예: /chart BTC")
+            return
+        if not sym.endswith("USDT") and not sym.endswith("USD"):
+            sym = sym + "USDT"
+        tg.send(f"📈 {sym} 차트 생성 중...")
+        try:
+            from . import chart as _chart
+            raw = ex.get_ohlcv_cached(sym, "240", 180)  # 4H 봉
+            if len(raw) < 60:
+                tg.send(f"⚠️ {sym} 데이터 부족")
+                return
+            # DataFrame → list of dict (최신순)
+            candles = []
+            for i in range(len(raw) - 1, -1, -1):
+                r = raw.iloc[i]
+                candles.append({
+                    "open": float(r["open"]), "high": float(r["high"]),
+                    "low": float(r["low"]), "close": float(r["close"]),
+                })
+            png = _chart.make_chart(candles, f"{sym} 4H — Ichimoku + Trendlines",
+                                    is_crypto=True)
+            if png:
+                tg.send_photo(png, caption=f"📈 {sym} 일목균형표 + 추세선 (4H)")
+            else:
+                tg.send("⚠️ 차트 생성 실패")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            tg.send(f"⚠️ /chart 오류: {type(e).__name__}: {e}")
+
     def analyze_cmd():
         """v6.51: 임의 crypto 심볼 기술적 분석.
         사용법: /analyze BTC 또는 /analyze ETHUSDT
@@ -919,6 +953,7 @@ def _setup_handlers():
         "/risk":   risk_cmd,
         "/portfolio": portfolio_cmd,
         "/analyze": analyze_cmd,
+        "/chart":  chart_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
