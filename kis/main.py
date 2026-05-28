@@ -1215,6 +1215,26 @@ def main():
             traceback.print_exc()
             telegram.send(f"⚠️ /universe 오류: {type(e).__name__}: {e}")
 
+    def cmd_equity():
+        """v6.61: KIS 총자산 추이 (1일/7일/30일)."""
+        try:
+            import equity as _eq
+            from config import IS_PAPER
+            bal = get_balance_info()
+            krw_total = bal.get("total_eval", 0) if bal else 0
+            import trader_overseas as _ot
+            os_bal = _ot.get_overseas_balance()
+            usd_avail = os_bal.get("available_usd", 0)
+            # USD 주식 평가 — os_pos 합계
+            usd_stocks = 0.0
+            for t, p in os_pos.items():
+                usd_stocks += p.get("buy_price", 0) * p.get("qty", 0)
+            usd_total = usd_avail + usd_stocks
+            rate = float(os.environ.get("USD_KRW_RATE", "1380"))
+            telegram.send(_eq.format_summary(krw_total, usd_total, rate))
+        except Exception as e:
+            telegram.send(f"⚠️ /equity 오류: {type(e).__name__}: {e}")
+
     def cmd_chart():
         """v6.56/6.59: 일목균형표 + 추세선 + 손절/익절 라인.
         사용법: /chart 005930
@@ -1466,6 +1486,7 @@ def main():
         "/universe": cmd_universe,
         "/analyze": cmd_analyze,
         "/chart": cmd_chart,
+        "/equity": cmd_equity,
     }
 
     # v6.52: KIS Multi-agent — Bybit 와 동일 패턴
@@ -1579,6 +1600,7 @@ def main():
             pass
     last_weekly_review_kst_date = ""
     last_summary_kst_hour = -1  # v3.9: 정각 리포트 (시간별 1회)
+    last_equity_snapshot_date = ""  # v6.61: 매일 1회 잔고 스냅샷
     last_news_report_kst_date = ""  # v5.0: 09:00 KST 시장 뉴스 (일 1회)
     last_rotation_check_kst_hour = -1  # v6.7: 매 시간 09:10 ~ 14:10 회전 체크
     # v6.40: 회전 매도 후 24h 재매수 차단 (같은 루프 스캐너 재픽업 방지)
@@ -1932,6 +1954,27 @@ def main():
             send_summary(dom_pos, os_pos, trade_count)
             last_summary_kst_hour = now.hour
             # v6.38: 자동 휴식 제거 (사용자 요청). 가중치 시스템이 대체.
+
+        # v6.61: 매일 1회 잔고 스냅샷
+        today_snap_str = now.strftime("%Y-%m-%d")
+        if today_snap_str != last_equity_snapshot_date:
+            try:
+                import equity as _eq
+                bal = get_balance_info()
+                krw_total = bal.get("total_eval", 0) if bal else 0
+                import trader_overseas as _ot
+                os_bal = _ot.get_overseas_balance()
+                usd_avail = os_bal.get("available_usd", 0)
+                usd_stocks = 0.0
+                for t, p in os_pos.items():
+                    usd_stocks += p.get("buy_price", 0) * p.get("qty", 0)
+                usd_total = usd_avail + usd_stocks
+                rate = float(os.environ.get("USD_KRW_RATE", "1380"))
+                if krw_total > 0 or usd_total > 0:
+                    _eq.save_snapshot(krw_total, usd_total, rate)
+                    last_equity_snapshot_date = today_snap_str
+            except Exception as e:
+                print(f"[MAIN] equity snapshot err: {e}")
 
         # ════ v5.0: 09:00 KST KR 시장 뉴스 sentiment (일 1회) ═════════════════
         today_str = now.strftime("%Y-%m-%d")

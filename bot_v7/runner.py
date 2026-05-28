@@ -18,6 +18,7 @@ import pandas as pd
 from . import ai
 from . import claude_agent
 from . import config as cfg
+from . import equity as eq
 from . import exchange as ex
 from . import notifier as tg
 from . import regime as rgm
@@ -780,6 +781,14 @@ def _setup_handlers():
         except Exception as e:
             tg.send(f"⚠️ Portfolio 오류: {type(e).__name__}: {e}")
 
+    def equity_cmd():
+        """v6.61: 실제 잔고 추이 (1일/7일/30일)."""
+        try:
+            cur = ex.get_balance()
+            tg.send(eq.format_summary(cur))
+        except Exception as e:
+            tg.send(f"⚠️ /equity 오류: {type(e).__name__}: {e}")
+
     def chart_cmd():
         """v6.56/6.59: 일목 + 추세선 + 손절/익절 (crypto).
         /chart BTC  또는  /chart BTC 60000 58000 65000 (진입/손절/익절)
@@ -981,6 +990,7 @@ def _setup_handlers():
         "/portfolio": portfolio_cmd,
         "/analyze": analyze_cmd,
         "/chart":  chart_cmd,
+        "/equity": equity_cmd,
         "/halt":    halt,
         "/resume":  resume,
     }
@@ -1024,6 +1034,20 @@ _last_regime_deep: dict = {}
 
 # v6.43: Claude Agent 시간별 트리거 캐시
 _last_claude_agent_ts: float = 0.0
+_last_equity_snapshot_date: str = ""
+
+
+def _maybe_save_equity_snapshot(equity: float):
+    """v6.61: 매일 1회 잔고 스냅샷 저장."""
+    global _last_equity_snapshot_date
+    today = datetime.now(KST).strftime("%Y-%m-%d")
+    if today == _last_equity_snapshot_date:
+        return
+    if equity <= 0:
+        return
+    if eq.save_snapshot(equity):
+        _last_equity_snapshot_date = today
+        print(f"[equity] snapshot saved: {today} ${equity:.2f}", flush=True)
 
 
 def _maybe_run_claude_agent():
@@ -1372,6 +1396,8 @@ def main():
             _maybe_run_regime_deep(symbol_dfs)
             # v6.43: 시간별 Claude Agent 자율 분석
             _maybe_run_claude_agent()
+            # v6.61: 매일 1회 잔고 스냅샷 (실제 거래소 PnL 추적)
+            _maybe_save_equity_snapshot(equity)
             _maybe_hourly_report(equity)
             _maybe_run_weekly_review()
 
