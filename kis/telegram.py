@@ -44,10 +44,18 @@ def _raw_send(message: str):
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={
+        r = requests.post(url, json={
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message,
             "parse_mode": "HTML"
+        }, timeout=5)
+        if r.status_code == 200:
+            return
+        # v6.62: HTML 파싱 실패시 plain text 재시도
+        print(f"[TELEGRAM HTML 실패 — plain 재시도] {r.status_code}: {r.text[:200]}")
+        requests.post(url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
         }, timeout=5)
     except Exception as e:
         print(f"[TELEGRAM 오류] {e}")

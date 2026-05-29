@@ -1295,13 +1295,15 @@ def main():
                                     entry=entry, sl=sl, tp=tp)
             if png:
                 telegram.send_photo(png, caption=f"📈 {ticker} 일목균형표 + 추세선")
-                # v6.58/6.59: 해설 + 단기/장기 + 손절/익절 R:R
+                # v6.58/6.59/6.62: 해설 + 단기/장기 + 손절/익절 R:R
                 try:
                     analysis = _chart.chart_analysis(candles, ticker, is_crypto=is_us,
                                                      entry=entry, sl=sl, tp=tp)
                     telegram.send_force(analysis)
                 except Exception as ae:
-                    print(f"[chart_analysis err] {ae}")
+                    import traceback as _tb
+                    print(f"[chart_analysis err] {_tb.format_exc()}", flush=True)
+                    telegram.send(f"⚠️ 분석 텍스트 오류: {type(ae).__name__}: {str(ae)[:200]}")
             else:
                 telegram.send("⚠️ 차트 생성 실패")
         except Exception as e:
