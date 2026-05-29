@@ -235,9 +235,9 @@ def chart_analysis(candles: list, ticker: str = "", is_crypto: bool = False,
     # 전환선 vs 기준선
     if tenkan == tenkan and kijun == kijun:
         if tenkan > kijun:
-            lines.append(f"• 전환선 > 기준선 → 단기 매수 우위 🟢")
+            lines.append(f"• 전환선이 기준선 위 → 단기 매수 우위 🟢")
         else:
-            lines.append(f"• 전환선 < 기준선 → 단기 매도 우위 🔴")
+            lines.append(f"• 전환선이 기준선 아래 → 단기 매도 우위 🔴")
 
     # ── 단기 분석 (전환선 / MA20) ────
     lines.append("\n<b>📈 단기 (수일~2주)</b>")
@@ -269,9 +269,9 @@ def chart_analysis(candles: list, ticker: str = "", is_crypto: bool = False,
         lines.append(f"• MA200 {fmt(ma200)} {pos} ({diff:+.1f}%) {emoji}")
         # 정배열 판정
         if ma20 > ma50 > ma200:
-            lines.append("• <b>정배열</b> (MA20>50>200) → 강한 상승추세 ✅")
+            lines.append("• <b>정배열</b> (MA20 ↑ MA50 ↑ MA200) → 강한 상승추세 ✅")
         elif ma20 < ma50 < ma200:
-            lines.append("• <b>역배열</b> (MA20<50<200) → 강한 하락추세 🔴")
+            lines.append("• <b>역배열</b> (MA20 ↓ MA50 ↓ MA200) → 강한 하락추세 🔴")
         else:
             lines.append("• 혼조 배열 → 방향성 불명확 ⚪")
 
