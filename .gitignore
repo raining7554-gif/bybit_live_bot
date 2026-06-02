@@ -3,5 +3,7 @@ __pycache__/
 *.pyo
 backtest/data/
 backtest/reports/
+backtest_us/data/
+backtest_us/reports/
 .env
 *.log
