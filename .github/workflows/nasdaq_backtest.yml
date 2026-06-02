@@ -1,0 +1,106 @@
+name: NASDAQ Clenow Backtest
+
+# 폰만으로 전체 루프: 이 워크플로를 실행하면 GitHub 러너(네트워크 O)가
+# stooq 데이터를 받아 backtest_us 백테스트를 돌리고, 결과를 레포에 커밋한다.
+# 맥 없이도 실제 백테스트 결과를 폰에서 확인 가능.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "백테스트를 돌릴 브랜치"
+        default: "claude/nasdaq-quant-handoff-juxHE"
+      lookback:
+        description: "모멘텀 회귀 기간(일)"
+        default: "90"
+      top_n:
+        description: "보유 종목 수"
+        default: "12"
+      refresh:
+        description: "stooq 강제 재다운로드 (true/false)"
+        default: "false"
+  schedule:
+    # 매주 월요일 00:30 UTC = 09:30 KST (main 머지 후 활성)
+    - cron: "30 0 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install pandas numpy requests
+
+      # stooq 데이터를 주 단위로 캐시 — 매 실행마다 재다운로드 방지.
+      - name: Cache price data
+        uses: actions/cache@v4
+        with:
+          path: backtest_us/data
+          key: stooq-${{ github.run_id }}
+          restore-keys: |
+            stooq-
+
+      - name: Run NASDAQ Clenow backtest
+        id: bt
+        run: |
+          REFRESH=""
+          if [ "${{ github.event.inputs.refresh }}" = "true" ]; then REFRESH="--refresh"; fi
+          python -m backtest_us.run \
+            --lookback "${{ github.event.inputs.lookback || '90' }}" \
+            --top-n "${{ github.event.inputs.top_n || '12' }}" \
+            $REFRESH | tee /tmp/bt_out.txt
+
+      - name: Write committed result
+        run: |
+          {
+            echo "# NASDAQ Clenow 백테스트 결과"
+            echo ""
+            echo "- 실행: $(date -u +'%Y-%m-%d %H:%M UTC') (GitHub Actions)"
+            echo "- 브랜치: ${{ github.event.inputs.ref || github.ref_name }}"
+            echo "- lookback=${{ github.event.inputs.lookback || '90' }}, top_n=${{ github.event.inputs.top_n || '12' }}"
+            echo ""
+            echo '```'
+            cat /tmp/bt_out.txt
+            echo '```'
+          } > backtest_us/ci_results/latest.md
+
+      - name: Commit result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backtest_us/ci_results/latest.md
+          if git diff --staged --quiet; then
+            echo "no changes"
+          else
+            git commit -m "chore(backtest_us): NASDAQ Clenow result $(date -u +%Y-%m-%d) [skip ci]"
+            git push origin "${{ github.event.inputs.ref || github.ref_name }}"
+          fi
+
+      - name: Telegram notify (optional)
+        if: ${{ env.TG_TOKEN != '' && env.TG_CHAT_ID != '' }}
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os, requests
+          token, chat = os.environ["TG_TOKEN"], os.environ["TG_CHAT_ID"]
+          with open("/tmp/bt_out.txt") as f:
+              body = f.read()[-3500:]
+          requests.post(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              json={"chat_id": chat, "text": "📈 NASDAQ Clenow 백테스트 결과\n\n" + body},
+              timeout=10,
+          )
+          PY
