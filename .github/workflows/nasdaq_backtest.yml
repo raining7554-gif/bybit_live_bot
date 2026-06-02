@@ -9,7 +9,7 @@ on:
     inputs:
       ref:
         description: "백테스트를 돌릴 브랜치"
-        default: "claude/nasdaq-quant-handoff-juxHE"
+        default: "main"
       lookback:
         description: "모멘텀 회귀 기간(일)"
         default: "90"
@@ -26,6 +26,11 @@ on:
 permissions:
   contents: write
 
+# 동시 실행이 같은 브랜치에 push 충돌 내지 않도록 직렬화.
+concurrency:
+  group: nasdaq-backtest-${{ github.event.inputs.ref || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   backtest:
     runs-on: ubuntu-latest
@@ -40,7 +45,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install deps
-        run: pip install pandas numpy requests
+        run: pip install pandas numpy requests yfinance
 
       # stooq 데이터를 주 단위로 캐시 — 매 실행마다 재다운로드 방지.
       - name: Cache price data
@@ -54,6 +59,7 @@ jobs:
       - name: Run NASDAQ Clenow backtest
         id: bt
         run: |
+          set -o pipefail   # 파이썬이 죽으면 tee가 가려도 step이 실패하도록
           REFRESH=""
           if [ "${{ github.event.inputs.refresh }}" = "true" ]; then REFRESH="--refresh"; fi
           python -m backtest_us.run \
@@ -84,7 +90,9 @@ jobs:
             echo "no changes"
           else
             git commit -m "chore(backtest_us): NASDAQ Clenow result $(date -u +%Y-%m-%d) [skip ci]"
-            git push origin "${{ github.event.inputs.ref || github.ref_name }}"
+            BR="${{ github.event.inputs.ref || github.ref_name }}"
+            git pull --rebase origin "$BR" || true   # 원격 변경 흡수 후 push
+            git push origin "HEAD:$BR"
           fi
 
       - name: Telegram notify (optional)
