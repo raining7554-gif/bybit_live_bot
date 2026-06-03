@@ -1,0 +1,90 @@
+name: PIT S&P500 Clenow Backtest
+
+# 생존편향-FREE 전용 워크플로. 입력 없이 "Run workflow"만 누르면 항상
+# point-in-time S&P500 유니버스(상폐 종목 포함)로 백테스트한다.
+# (일반 nasdaq_backtest.yml의 pit=true 입력을 깜빡하는 실수를 원천 차단)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback:
+        description: "모멘텀 회귀 기간(일)"
+        default: "90"
+      top_n:
+        description: "보유 종목 수"
+        default: "12"
+      refresh:
+        description: "가격 강제 재다운로드 (true/false)"
+        default: "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pit-backtest-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    # 1194개(상폐 포함) 가격 수집은 첫 실행이 느릴 수 있으므로 넉넉히.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install pandas numpy requests yfinance
+
+      # PIT 가격 캐시 — 상폐 종목 커버리지가 실행마다 누적되도록 별도 키 사용.
+      - name: Cache price data
+        uses: actions/cache@v4
+        with:
+          path: backtest_us/data
+          key: pitdata-${{ github.run_id }}
+          restore-keys: |
+            pitdata-
+            stooq-
+
+      - name: Run PIT Clenow backtest
+        run: |
+          set -o pipefail
+          REFRESH=""
+          if [ "${{ github.event.inputs.refresh }}" = "true" ]; then REFRESH="--refresh"; fi
+          python -m backtest_us.run --pit \
+            --lookback "${{ github.event.inputs.lookback || '90' }}" \
+            --top-n "${{ github.event.inputs.top_n || '12' }}" \
+            $REFRESH | tee /tmp/bt_out.txt
+
+      - name: Write committed result
+        run: |
+          {
+            echo "# Clenow 백테스트 결과 — S&P500 point-in-time (생존편향-free)"
+            echo ""
+            echo "- 실행: $(date -u +'%Y-%m-%d %H:%M UTC') (GitHub Actions)"
+            echo "- 브랜치: ${{ github.ref_name }}"
+            echo "- lookback=${{ github.event.inputs.lookback || '90' }}, top_n=${{ github.event.inputs.top_n || '12' }}"
+            echo ""
+            echo '```'
+            cat /tmp/bt_out.txt
+            echo '```'
+          } > backtest_us/ci_results/latest_pit.md
+
+      - name: Commit result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backtest_us/ci_results/latest_pit.md backtest_us/data/sp500_ticker_start_end.csv
+          if git diff --staged --quiet; then
+            echo "no changes"
+          else
+            git commit -m "chore(backtest_us): PIT Clenow result $(date -u +%Y-%m-%d) [skip ci]"
+            git pull --rebase origin "${{ github.ref_name }}" || true
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
