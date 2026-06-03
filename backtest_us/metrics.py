@@ -43,15 +43,15 @@ def _curve_stats(eq: pd.Series, name: str) -> dict:
     }
 
 
-def compute_metrics(result, name: str = "strategy") -> list[dict]:
-    """Return [strategy, QQQ, EW-universe] stats for side-by-side reporting.
+def compute_metrics(result, name: str = "strategy", bench_name: str = "QQQ") -> list[dict]:
+    """Return [strategy, benchmark, EW-universe] stats for side-by-side reporting.
 
     The EW-universe column is the survivorship-bias control: it shares the
-    strategy's exact (survivor) universe, so strategy-minus-EW is the alpha
-    that is NOT explained by the universe's hindsight selection.
+    strategy's exact universe, so strategy-minus-EW is the alpha that is NOT
+    explained by the universe's hindsight selection.
     """
     strat = _curve_stats(result.equity_curve, name)
-    bench = _curve_stats(result.benchmark_curve, "QQQ buy&hold")
+    bench = _curve_stats(result.benchmark_curve, f"{bench_name} buy&hold")
     # Rebalance/regime diagnostics on the strategy row.
     if getattr(result, "rebalances", None):
         rbs = result.rebalances

@@ -19,6 +19,9 @@ on:
       refresh:
         description: "stooq 강제 재다운로드 (true/false)"
         default: "false"
+      pit:
+        description: "생존편향-free S&P500 point-in-time 유니버스 (true/false)"
+        default: "false"
   schedule:
     # 매주 월요일 00:30 UTC = 09:30 KST (main 머지 후 활성)
     - cron: "30 0 * * 1"
@@ -62,15 +65,24 @@ jobs:
           set -o pipefail   # 파이썬이 죽으면 tee가 가려도 step이 실패하도록
           REFRESH=""
           if [ "${{ github.event.inputs.refresh }}" = "true" ]; then REFRESH="--refresh"; fi
+          PIT=""
+          if [ "${{ github.event.inputs.pit }}" = "true" ]; then PIT="--pit"; fi
           python -m backtest_us.run \
             --lookback "${{ github.event.inputs.lookback || '90' }}" \
             --top-n "${{ github.event.inputs.top_n || '12' }}" \
-            $REFRESH | tee /tmp/bt_out.txt
+            $REFRESH $PIT | tee /tmp/bt_out.txt
 
       - name: Write committed result
         run: |
+          OUT="backtest_us/ci_results/latest.md"
+          MODE="NASDAQ survivor"
+          if [ "${{ github.event.inputs.pit }}" = "true" ]; then
+            OUT="backtest_us/ci_results/latest_pit.md"
+            MODE="S&P500 point-in-time (생존편향-free)"
+          fi
+          echo "RESULT_FILE=$OUT" >> "$GITHUB_ENV"
           {
-            echo "# NASDAQ Clenow 백테스트 결과"
+            echo "# Clenow 백테스트 결과 — $MODE"
             echo ""
             echo "- 실행: $(date -u +'%Y-%m-%d %H:%M UTC') (GitHub Actions)"
             echo "- 브랜치: ${{ github.event.inputs.ref || github.ref_name }}"
@@ -79,13 +91,13 @@ jobs:
             echo '```'
             cat /tmp/bt_out.txt
             echo '```'
-          } > backtest_us/ci_results/latest.md
+          } > "$OUT"
 
       - name: Commit result
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backtest_us/ci_results/latest.md
+          git add "$RESULT_FILE"
           if git diff --staged --quiet; then
             echo "no changes"
           else

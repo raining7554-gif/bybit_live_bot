@@ -59,13 +59,42 @@ def run_portfolio_backtest(
     benchmark: pd.DataFrame,
     alpha_fn: Callable[[pd.DataFrame], list[tuple[str, float]]],
     cfg: BTConfig = BTConfig(),
+    eligibility: dict[str, tuple] | None = None,
 ) -> BTResult:
+    """Run the backtest.
+
+    `eligibility`, when given, is the point-in-time membership window per ticker:
+    ``{ticker: (start_ts, end_ts_or_None)}``. With it the run is survivorship-bias
+    free — a name is only a candidate (and only counts in the EW benchmark) while
+    listed, and any holding is liquidated once it leaves the index. Without it the
+    legacy survivor-universe behaviour is preserved exactly.
+    """
     # Master calendar = benchmark's trading sessions.
     master = benchmark.index
+    # `closes` is forward-filled for valuation & execution fills (so a name that
+    # delists between rebalances can still be marked / sold at its last price).
     closes = close_matrix(prices).reindex(master).ffill()
     opens = close_matrix(prices, field="open").reindex(master)
     # Fill price for execution: prefer the open; fall back to that day's close.
     fill = opens.where(opens.notna(), closes)
+
+    # `closes_live` masks each name to its listed window (NaN before start / after
+    # end). It drives candidate selection and the EW benchmark so that the survivor
+    # bias is removed and delisting declines are felt, not frozen by the ffill.
+    if eligibility is not None:
+        listed = pd.DataFrame(False, index=master, columns=closes.columns)
+        for t in closes.columns:
+            win = eligibility.get(t)
+            if win is None:
+                continue
+            start, end = win
+            mask = master >= start
+            if end is not None:
+                mask &= master <= end
+            listed[t] = mask
+        closes_live = closes.where(listed)
+    else:
+        closes_live = closes
 
     bench_close = benchmark["close"].reindex(master).ffill()
     bench_ma = bench_close.rolling(cfg.regime_ma).mean()
@@ -128,7 +157,12 @@ def run_portfolio_backtest(
         if i >= cfg.warmup and dt in sig_days and i + 1 < len(master):
             regime_on = bool(bench_close.iloc[i] > bench_ma.iloc[i]) if not np.isnan(bench_ma.iloc[i]) else False
             if regime_on:
-                window = closes.iloc[: i + 1]   # up to & incl today -> no look-ahead
+                window = closes_live.iloc[: i + 1]   # up to & incl today -> no look-ahead
+                if eligibility is not None:
+                    # Only names listed *today* are candidates (a delisted name's
+                    # stale pre-delist window must not be ranked).
+                    live_today = closes_live.columns[closes_live.iloc[i].notna()]
+                    window = window[live_today]
                 targets = alpha_fn(window)
             else:
                 targets = []                    # regime off -> all cash
@@ -141,10 +175,12 @@ def run_portfolio_backtest(
     bench_curve = bench_close / bench_close.iloc[0] * cfg.initial_equity
 
     # Equal-weight buy&hold of the SAME universe — a survivorship-bias control.
-    # Strategy and this benchmark share the identical (survivor) universe, so the
-    # gap between them isolates the alpha (momentum + regime), bias-neutral.
-    daily_ret = closes.pct_change()
-    ew_ret = daily_ret.mean(axis=1)               # avg across names available each day
+    # Strategy and this benchmark share the identical universe, so the gap between
+    # them isolates the alpha (momentum + regime). Under PIT eligibility this EW
+    # holds every name *while listed* — including losers into their decline — which
+    # is exactly the fair test the survivor universe could not provide.
+    daily_ret = closes_live.pct_change()
+    ew_ret = daily_ret.mean(axis=1)               # avg across listed names each day
     ew_curve = (1 + ew_ret.fillna(0)).cumprod() * cfg.initial_equity
 
     return BTResult(
