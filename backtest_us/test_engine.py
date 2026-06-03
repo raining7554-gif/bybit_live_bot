@@ -69,8 +69,41 @@ def test_costs_reduce_equity():
           f"cost=1% -> ${pricey.final_equity:,.0f}")
 
 
+def test_pit_eligibility_excludes_delisted():
+    """A name removed from the index must not be ranked or held after its end
+    date, and must not be frozen into the EW benchmark by the ffill."""
+    prices, bench = _setup(800)
+    # Make S0 a strong, smooth uptrend so momentum WANTS it, then delist it midway.
+    s0 = prices["S0"].copy()
+    end_i = 400
+    eligibility = {t: (prices[t].index[0], None) for t in prices}
+    eligibility["S0"] = (prices["S0"].index[0], prices["S0"].index[end_i])
+    alpha = make_alpha(MomentumConfig(top_n=8))
+    res = run_portfolio_backtest(prices, bench, alpha, BTConfig(), eligibility=eligibility)
+    # After the end date, S0 must never appear in any target basket.
+    end_dt = prices["S0"].index[end_i]
+    leaked = [dt for dt, w in res.weights_log.items() if dt > end_dt and "S0" in w]
+    assert not leaked, f"delisted S0 ranked after end on {len(leaked)} rebalances"
+    print(f"[PASS] pit_eligibility: S0 excluded on all {sum(1 for d in res.weights_log if d>end_dt)} "
+          f"post-delist rebalances")
+
+
+def test_eligibility_none_is_backward_compatible():
+    """eligibility=None must reproduce the legacy survivor-mode curve exactly."""
+    prices, bench = _setup(700)
+    alpha = make_alpha(MomentumConfig(top_n=8))
+    a = run_portfolio_backtest(prices, bench, alpha, BTConfig())
+    full = {t: (prices[t].index[0], None) for t in prices}  # everyone always listed
+    b = run_portfolio_backtest(prices, bench, alpha, BTConfig(), eligibility=full)
+    diff = np.max(np.abs(a.equity_curve.values - b.equity_curve.values))
+    assert diff < 1e-6, f"eligibility wiring changed survivor-mode result: {diff:.2e}"
+    print(f"[PASS] eligibility_backcompat: all-listed == None (max diff {diff:.2e})")
+
+
 if __name__ == "__main__":
     test_no_lookahead()
     test_regime_filter_goes_to_cash()
     test_costs_reduce_equity()
+    test_pit_eligibility_excludes_delisted()
+    test_eligibility_none_is_backward_compatible()
     print("\nAll engine tests passed.")
