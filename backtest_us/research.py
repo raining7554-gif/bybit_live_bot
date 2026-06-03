@@ -39,6 +39,29 @@ def alpha_ew_all():
     return fn
 
 
+def alpha_breadth(ma: int = 200, min_history: int = 60):
+    """Equal-weight ALL listed names but at gross exposure = market breadth
+    (fraction of names above their own `ma` MA). Vectorised per rebalance — the
+    engine's index regime gate (cfg.regime_ma) still applies on top.
+    """
+    def fn(w: pd.DataFrame) -> list[tuple[str, float]]:
+        if len(w) < min_history:
+            return []
+        last = w.iloc[-1]
+        ma_vals = w.iloc[-ma:].mean()                    # skipna column means
+        listed = last.notna()
+        n = int(listed.sum())
+        if n == 0:
+            return []
+        above = (last > ma_vals) & listed
+        breadth = float(above.sum()) / n                 # 0..1 exposure
+        if breadth <= 0:
+            return []
+        wt = breadth / n                                 # EW of all listed, scaled
+        return [(t, wt) for t in w.columns[listed]]
+    return fn
+
+
 def alpha_ew_trend(ma: int = 100, min_history: int = 120):
     """Equal weight across names trading ABOVE their own `ma`-day average (each
     name must be in its own uptrend), on top of the engine's index regime filter."""

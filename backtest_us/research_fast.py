@@ -79,6 +79,55 @@ def evaluate(spy, stocks_live, regime_ma=200, trend_ma=0, weekly=True):
     return _stats(curve, f"EWreg{regime_ma}" + (f"_tr{trend_ma}" if trend_ma else "_all"), pct_inv)
 
 
+def _weekly_ffill(sig_series, spy_index):
+    wk = pd.Series(spy_index, index=spy_index).resample("W").last().dropna()
+    keep = sig_series.index.isin(set(wk.values))
+    return sig_series.where(keep).ffill()
+
+
+def evaluate_adv(spy, stocks_live, regime_ma=250, breadth_ma=0,
+                 vol_target=0.0, vol_win=60, cap=1.0, weekly=True, label=None):
+    """Regime-timed EW with optional continuous exposure controls:
+
+      - breadth_ma>0 : scale exposure by the FRACTION of names above their own
+                       `breadth_ma` MA (market breadth), 0..1.
+      - vol_target>0 : scale toward a target annual vol using trailing `vol_win`
+                       realised vol of the fully-invested EW return, capped at `cap`.
+    Exposures are decided on day i, applied day i+1 (no look-ahead).
+    """
+    R = stocks_live.pct_change().clip(upper=1.0)
+    ew = R.mean(axis=1)                                  # fully-invested EW return
+
+    exp = pd.Series(1.0, index=spy.index)
+    # binary index regime gate
+    if regime_ma:
+        reg = (spy > spy.rolling(regime_ma).mean()).astype(float)
+        exp = exp * (_weekly_ffill(reg, spy.index) if weekly else reg)
+    # breadth scaling
+    if breadth_ma:
+        ma_s = stocks_live.rolling(breadth_ma, min_periods=breadth_ma // 2).mean()
+        breadth = (stocks_live > ma_s).sum(axis=1) / stocks_live.notna().sum(axis=1)
+        exp = exp * (_weekly_ffill(breadth, spy.index) if weekly else breadth)
+    # volatility targeting
+    if vol_target:
+        rv = ew.rolling(vol_win).std() * np.sqrt(TD)
+        scale = (vol_target / rv).clip(upper=cap)
+        exp = exp * (_weekly_ffill(scale, spy.index) if weekly else scale)
+
+    exp = exp.shift(1).clip(0.0, cap).fillna(0.0)
+    strat = (ew * exp).fillna(0.0)
+    curve = (1 + strat).cumprod()
+    if label is None:
+        label = "EW"
+        if regime_ma:
+            label += f" reg{regime_ma}"
+        if breadth_ma:
+            label += f" brd{breadth_ma}"
+        if vol_target:
+            label += f" vt{int(vol_target*100)}c{cap:g}"
+    return _stats(curve, label, float(exp.mean()))
+
+
 def baselines(spy, stocks_live):
     R = stocks_live.pct_change().clip(upper=1.0)
     ew = (1 + R.mean(axis=1).fillna(0)).cumprod()
@@ -90,11 +139,20 @@ def main():
     spy, sl = _load_matrices()
     print(f"[fast] {sl.shape[1]} names x {sl.shape[0]} days loaded\n")
 
-    rows = []
-    for rma in (100, 150, 200, 250):
-        rows.append(evaluate(spy, sl, regime_ma=rma, trend_ma=0))
-    for tma in (100, 150, 200):
-        rows.append(evaluate(spy, sl, regime_ma=200, trend_ma=tma))
+    rows = [
+        evaluate(spy, sl, regime_ma=250, trend_ma=0),            # net-validated winner
+        # breadth-scaled exposure (continuous)
+        evaluate_adv(spy, sl, regime_ma=0,   breadth_ma=200),
+        evaluate_adv(spy, sl, regime_ma=250, breadth_ma=200),
+        evaluate_adv(spy, sl, regime_ma=250, breadth_ma=100),
+        # vol targeting (no leverage)
+        evaluate_adv(spy, sl, regime_ma=250, vol_target=0.10, cap=1.0),
+        evaluate_adv(spy, sl, regime_ma=250, vol_target=0.12, cap=1.0),
+        # vol targeting with mild leverage
+        evaluate_adv(spy, sl, regime_ma=250, vol_target=0.12, cap=1.5),
+        # combined breadth + vol target
+        evaluate_adv(spy, sl, regime_ma=250, breadth_ma=200, vol_target=0.12, cap=1.5),
+    ]
 
     ew, spyb = baselines(spy, sl)
     _print(rows + [ew, spyb], ew["sharpe"])
