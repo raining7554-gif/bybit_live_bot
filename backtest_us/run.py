@@ -21,10 +21,70 @@ from .pit_universe import load_pit_universe, PIT_BENCHMARK
 from .data import load_prices, make_synthetic_prices
 from .alpha_momentum import MomentumConfig, make_alpha
 from .engine import BTConfig, run_portfolio_backtest
-from .metrics import compute_metrics, format_report
+from .metrics import compute_metrics, format_report, _curve_stats
 
 REPORT_DIR = os.path.join(os.path.dirname(__file__), "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
+
+# Curated momentum designs to test whether ANY beats the EW baseline. Hypothesis:
+# the top-12 concentration is what sinks Sharpe — more names + classic 12-1 period
+# (longer lookback, skip the recent month) should keep the regime drawdown control
+# while raising risk-adjusted return toward/above EW.
+_SWEEP = [
+    ("lb90  top12 skip0   (current)", dict(lookback=90,  top_n=12, skip=0)),
+    ("lb90  top30 skip0",             dict(lookback=90,  top_n=30, skip=0)),
+    ("lb90  top50 skip0",             dict(lookback=90,  top_n=50, skip=0)),
+    ("lb126 top30 skip21",            dict(lookback=126, top_n=30, skip=21)),
+    ("lb126 top50 skip21",            dict(lookback=126, top_n=50, skip=21)),
+    ("lb252 top30 skip21",            dict(lookback=252, top_n=30, skip=21)),
+    ("lb252 top50 skip21",            dict(lookback=252, top_n=50, skip=21)),
+    ("lb252 top50 skip21 eqwt",       dict(lookback=252, top_n=50, skip=21, weighting="equal")),
+]
+
+
+def run_sweep(prices, benchmark, btcfg, eligibility, bench_sym, is_pit):
+    """Run several momentum designs on one dataset; compare each to the EW baseline."""
+    rows = []
+    ew_row = bench_row = None
+    for label, kw in _SWEEP:
+        alpha = make_alpha(MomentumConfig(**kw))
+        res = run_portfolio_backtest(prices, benchmark, alpha, btcfg, eligibility=eligibility)
+        rows.append((label, _curve_stats(res.equity_curve, label)))
+        if ew_row is None:  # identical across configs — capture once
+            ew_row = _curve_stats(res.ew_universe_curve, "EW-universe (baseline)")
+            bench_row = _curve_stats(res.benchmark_curve, f"{bench_sym} buy&hold")
+
+    uni = "S&P500 point-in-time" if is_pit else "NASDAQ survivor"
+    hdr = f"Momentum design sweep [{uni}] — {len(prices)} stocks, cost={btcfg.cost:.2%}"
+    cols = ["CAGR", "Vol", "Sharpe", "Sortino", "MDD", "Calmar"]
+    keys = ["cagr", "ann_vol", "sharpe", "sortino", "mdd", "calmar"]
+
+    def fmt(st):
+        def g(k):
+            v = st[k]
+            if k in ("cagr", "ann_vol", "mdd"):
+                return f"{v:+.1%}" if v == v else "  n/a"
+            return f"{v:.2f}" if v == v else " n/a"
+        return "  ".join(f"{g(k):>7}" for k in keys)
+
+    ew_sh = ew_row["sharpe"]
+    lines = [hdr, "", f"{'design':<32}" + "  ".join(f"{c:>7}" for c in cols) + "   vs EW",
+             "-" * 92]
+    for label, st in rows:
+        flag = "WIN " if st["sharpe"] > ew_sh else "lose"
+        lines.append(f"{label:<32}{fmt(st)}   {flag} ({st['sharpe']-ew_sh:+.2f})")
+    lines.append("-" * 92)
+    lines.append(f"{ew_row['name']:<32}{fmt(ew_row)}")
+    lines.append(f"{bench_row['name']:<32}{fmt(bench_row)}")
+    report = "\n".join(lines)
+    print("\n" + report)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tag = "sweep_pit" if is_pit else "sweep"
+    path = os.path.join(REPORT_DIR, f"{tag}_{ts}.txt")
+    with open(path, "w") as f:
+        f.write(report + "\n")
+    print(f"\n[run] sweep saved: {path}")
 
 
 def main():
@@ -37,6 +97,8 @@ def main():
     ap.add_argument("--lookback", type=int, default=90)
     ap.add_argument("--equity", type=float, default=100_000.0)
     ap.add_argument("--cost", type=float, default=0.0010)
+    ap.add_argument("--sweep", action="store_true",
+                    help="momentum design sweep vs EW baseline (lookback/top_n/skip)")
     args = ap.parse_args()
 
     eligibility = None
@@ -72,10 +134,14 @@ def main():
             print(f"[run] PIT price coverage: {len(prices)}/{len(tickers)} ({cov:.0%}); "
                   f"delisted names fetched: {ended_got}")
 
-    mcfg = MomentumConfig(lookback=args.lookback, top_n=args.top_n)
-    alpha = make_alpha(mcfg)
     btcfg = BTConfig(initial_equity=args.equity, cost=args.cost)
 
+    if args.sweep:
+        run_sweep(prices, benchmark, btcfg, eligibility, benchmark_sym, args.pit)
+        return
+
+    mcfg = MomentumConfig(lookback=args.lookback, top_n=args.top_n)
+    alpha = make_alpha(mcfg)
     result = run_portfolio_backtest(prices, benchmark, alpha, btcfg, eligibility=eligibility)
     stats = compute_metrics(result, name=f"Clenow top{args.top_n}", bench_name=benchmark_sym)
     report = format_report(stats)

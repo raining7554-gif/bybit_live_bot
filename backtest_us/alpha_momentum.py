@@ -28,6 +28,8 @@ class MomentumConfig:
     max_weight: float = 0.20    # per-name weight cap
     max_gap: float = 0.15       # exclude if any 1-day move in lookback exceeds this
     min_history: int = 120      # need at least this many bars to score
+    skip: int = 0               # skip most-recent N days (classic 12-1 momentum gap)
+    weighting: str = "volparity"  # "volparity" (inverse-vol) or "equal"
 
 
 def _annualized_slope_r2(log_prices: np.ndarray) -> tuple[float, float]:
@@ -69,14 +71,17 @@ def make_alpha(cfg: MomentumConfig = MomentumConfig()):
         vols: dict[str, float] = {}
         for t in window_closes.columns:
             s = window_closes[t].dropna()
-            if len(s) < cfg.min_history:
+            if len(s) < cfg.min_history + cfg.skip:
                 continue
-            closes = s.values[-cfg.lookback:]
+            # Classic 12-1 momentum gap: score the trend up to `skip` days ago,
+            # excluding the most recent days (short-term reversal is noise/cost).
+            vals = s.values[: len(s) - cfg.skip] if cfg.skip > 0 else s.values
+            closes = vals[-cfg.lookback:]
             if len(closes) < cfg.lookback or np.any(closes <= 0):
                 continue
-            # Trend confirmation: price above long MA.
+            # Trend confirmation: latest price above long MA (uses current price).
             ma = s.values[-cfg.ma_trend:].mean() if len(s) >= cfg.ma_trend else None
-            if ma is None or closes[-1] <= ma:
+            if ma is None or s.values[-1] <= ma:
                 continue
             # Event-risk filter: skip names with an oversized recent gap.
             rets = np.diff(closes) / closes[:-1]
@@ -93,11 +98,14 @@ def make_alpha(cfg: MomentumConfig = MomentumConfig()):
             return []
         ranked = sorted(scores, key=scores.get, reverse=True)[: cfg.top_n]
 
-        # Inverse-volatility weights (vol parity), capped and renormalised.
-        inv = np.array([1.0 / vols[t] if vols.get(t) and not np.isnan(vols[t]) else 0.0
-                        for t in ranked])
-        if inv.sum() <= 0:
+        # Weighting: inverse-vol (vol parity) or plain equal weight.
+        if cfg.weighting == "equal":
             inv = np.ones(len(ranked))
+        else:
+            inv = np.array([1.0 / vols[t] if vols.get(t) and not np.isnan(vols[t]) else 0.0
+                            for t in ranked])
+            if inv.sum() <= 0:
+                inv = np.ones(len(ranked))
         w = inv / inv.sum()
         w = np.minimum(w, cfg.max_weight)
         if w.sum() > 0:
