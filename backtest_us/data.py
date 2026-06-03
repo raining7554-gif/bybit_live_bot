@@ -189,6 +189,45 @@ def close_matrix(prices: dict[str, pd.DataFrame], field: str = "close") -> pd.Da
     return pd.DataFrame(cols).sort_index()
 
 
+# ── research data bundle ──────────────────────────────────────────────
+# A committed, compressed close-price matrix so the (network-less) sandbox can
+# run unlimited backtests without re-fetching. Built once in CI from the cached
+# prices; thereafter the strategy-research loop is fully self-contained.
+BUNDLE_DIR = os.path.join(os.path.dirname(__file__), "research_data")
+BUNDLE_CLOSES = os.path.join(BUNDLE_DIR, "closes.csv.gz")
+
+
+def export_bundle(prices: dict[str, pd.DataFrame], extra: dict[str, pd.DataFrame] | None = None) -> str:
+    """Write a gzip-compressed wide close-price matrix (date x ticker) to the repo."""
+    os.makedirs(BUNDLE_DIR, exist_ok=True)
+    merged = dict(prices)
+    if extra:
+        merged.update(extra)            # e.g. the SPY benchmark
+    cm = close_matrix(merged).round(3)
+    cm.to_csv(BUNDLE_CLOSES)            # pandas infers gzip from the .gz suffix
+    return BUNDLE_CLOSES
+
+
+def load_bundle() -> dict[str, pd.DataFrame]:
+    """Load the committed bundle into the engine's dict[ticker]->OHLCV shape.
+
+    Only closes are stored; open is set equal to close, so the engine fills at
+    the next session's close (still no look-ahead — execution is one bar after
+    the signal). Good enough for design research; final numbers use a full CI run.
+    """
+    if not os.path.exists(BUNDLE_CLOSES):
+        raise SystemExit(f"no research bundle at {BUNDLE_CLOSES} — run the "
+                         "'Export PIT Data Bundle' workflow once to generate it.")
+    cm = pd.read_csv(BUNDLE_CLOSES, index_col=0, parse_dates=True)
+    out: dict[str, pd.DataFrame] = {}
+    for t in cm.columns:
+        s = cm[t].dropna()
+        if len(s) < _MIN_BARS:
+            continue
+        out[t] = pd.DataFrame({"open": s, "close": s})
+    return out
+
+
 def make_synthetic_prices(
     tickers: list[str],
     days: int = 1500,
