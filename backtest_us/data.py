@@ -36,6 +36,35 @@ def _csv_path(ticker: str) -> str:
     return os.path.join(DATA_DIR, f"{ticker.upper()}.csv")
 
 
+# Max plausible single-day UPSIDE for an S&P-caliber name. Real ones essentially
+# never gain >100% in a day; such jumps in our data are artifacts — unadjusted
+# stock splits (stooq daily is NOT split-adjusted, unlike yfinance) or symbol
+# reuse splicing two unrelated companies. We drop such tickers rather than let
+# them corrupt portfolio statistics (this is the central data-quality hazard of
+# the point-in-time / delisted universe; see ROADMAP [B]).
+_MAX_DAY_UP = 1.0
+_MIN_BARS = 60
+
+
+def sanitize(df: pd.DataFrame) -> pd.DataFrame | None:
+    """Return the price frame unchanged, or None if too corrupt to use.
+
+    Drops the ticker when it is too short or shows an implausible single-day
+    upside jump (unadjusted split / symbol-reuse splice). Downside crashes are
+    KEPT — a delisting collapse is real signal the fair test must feel.
+    """
+    if df is None or "close" not in df.columns:
+        return None
+    c = df["close"].astype(float)
+    c = c[c > 0].dropna()
+    if len(c) < _MIN_BARS:
+        return None
+    up = c.pct_change().max()
+    if pd.notna(up) and up > _MAX_DAY_UP:
+        return None
+    return df
+
+
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     """Lower-case OHLCV columns, datetime index named 'date', sorted, no NaN rows."""
     df = df.rename(columns={c: c.lower() for c in df.columns})
@@ -132,13 +161,27 @@ def load_prices(
                 print(f"[data] SKIP {t}: {type(e).__name__} {str(e)[:70]}")
 
     for t, df in fetched.items():
-        df.to_csv(_csv_path(t))
+        df.to_csv(_csv_path(t))      # cache the RAW series; sanitation is applied below
         out[t] = df
     if verbose and fetched:
         any_df = next(iter(fetched.values()))
         print(f"[data] fetched {len(fetched)}/{len(need)} new; "
               f"sample range {any_df.index[0].date()}..{any_df.index[-1].date()}")
-    return out
+
+    # Quality gate: drop corrupt series (unadjusted splits / symbol-reuse splices)
+    # so they cannot blow up portfolio statistics. Applied to cached & fresh alike.
+    clean: dict[str, pd.DataFrame] = {}
+    dropped: list[str] = []
+    for t, df in out.items():
+        ok = sanitize(df)
+        if ok is None:
+            dropped.append(t)
+        else:
+            clean[t] = ok
+    if verbose and dropped:
+        print(f"[data] sanitize: dropped {len(dropped)}/{len(out)} corrupt series "
+              f"(e.g. {', '.join(dropped[:8])}{'...' if len(dropped) > 8 else ''})")
+    return clean
 
 
 def close_matrix(prices: dict[str, pd.DataFrame], field: str = "close") -> pd.DataFrame:
