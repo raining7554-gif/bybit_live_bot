@@ -16,6 +16,9 @@ on:
       refresh:
         description: "가격 강제 재다운로드 (true/false)"
         default: "false"
+      sweep:
+        description: "모멘텀 설계 스윕(여러 lookback/top_n/skip vs EW) (true/false)"
+        default: "false"
 
 permissions:
   contents: write
@@ -57,10 +60,16 @@ jobs:
           set -o pipefail
           REFRESH=""
           if [ "${{ github.event.inputs.refresh }}" = "true" ]; then REFRESH="--refresh"; fi
-          python -m backtest_us.run --pit \
-            --lookback "${{ github.event.inputs.lookback || '90' }}" \
-            --top-n "${{ github.event.inputs.top_n || '12' }}" \
-            $REFRESH | tee /tmp/bt_out.txt
+          if [ "${{ github.event.inputs.sweep }}" = "true" ]; then
+            echo "OUTFILE=backtest_us/ci_results/latest_pit_sweep.md" >> "$GITHUB_ENV"
+            python -m backtest_us.run --pit --sweep $REFRESH | tee /tmp/bt_out.txt
+          else
+            echo "OUTFILE=backtest_us/ci_results/latest_pit.md" >> "$GITHUB_ENV"
+            python -m backtest_us.run --pit \
+              --lookback "${{ github.event.inputs.lookback || '90' }}" \
+              --top-n "${{ github.event.inputs.top_n || '12' }}" \
+              $REFRESH | tee /tmp/bt_out.txt
+          fi
 
       - name: Write committed result
         run: |
@@ -69,18 +78,18 @@ jobs:
             echo ""
             echo "- 실행: $(date -u +'%Y-%m-%d %H:%M UTC') (GitHub Actions)"
             echo "- 브랜치: ${{ github.ref_name }}"
-            echo "- lookback=${{ github.event.inputs.lookback || '90' }}, top_n=${{ github.event.inputs.top_n || '12' }}"
             echo ""
             echo '```'
-            cat /tmp/bt_out.txt
+            # 데이터 로딩 SKIP 스팸은 제외하고 결과 본문만 남긴다.
+            grep -v -E '^\[data\] (SKIP|yfinance)' /tmp/bt_out.txt
             echo '```'
-          } > backtest_us/ci_results/latest_pit.md
+          } > "$OUTFILE"
 
       - name: Commit result
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backtest_us/ci_results/latest_pit.md
+          git add "$OUTFILE"
           if git diff --staged --quiet; then
             echo "no changes"
           else
