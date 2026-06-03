@@ -1,16 +1,16 @@
-# NASDAQ Clenow 백테스트 결과
+# Clenow 백테스트 결과 — NASDAQ survivor
 
-- 실행: 2026-06-03 02:52 UTC (GitHub Actions)
+- 실행: 2026-06-03 03:07 UTC (GitHub Actions)
 - 브랜치: main
 - lookback=90, top_n=12
 
 ```
-[run] loading 158 tickers + QQQ from stooq cache (refresh=False) ...
+[run] loading 158 tickers + QQQ (refresh=False) ...
 [data] yfinance 1: 0/2 ok
 [data] SKIP SQ: ValueError SQ: non-CSV stooq response ('Get your apikey:\n\n1. Open https://stooq
 [data] SKIP ANSS: ValueError ANSS: non-CSV stooq response ('Get your apikey:\n\n1. Open https://sto
 
-NASDAQ Clenow Momentum — 156 stocks, lookback=90, top_n=12, cost=0.10%
+Clenow Momentum [NASDAQ survivor] — 156 stocks, lookback=90, top_n=12, cost=0.10%
 period: 1999-03-10 .. 2026-06-02
 
                         Clenow top12      QQQ buy&hold       EW-universe
@@ -27,5 +27,5 @@ Calmar                          0.38              0.13              0.39
 투자비중(레짐ON)                       73%                 -                 -
 평균 회전율                           44%                 -                 -
 
-[run] report saved: /home/runner/work/bybit_live_bot/bybit_live_bot/backtest_us/reports/stooq_20260603_025245.txt
+[run] report saved: /home/runner/work/bybit_live_bot/bybit_live_bot/backtest_us/reports/stooq_20260603_030738.txt
 ```
