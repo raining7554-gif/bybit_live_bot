@@ -44,7 +44,12 @@ def _curve_stats(eq: pd.Series, name: str) -> dict:
 
 
 def compute_metrics(result, name: str = "strategy") -> list[dict]:
-    """Return [strategy_stats, benchmark_stats] for side-by-side reporting."""
+    """Return [strategy, QQQ, EW-universe] stats for side-by-side reporting.
+
+    The EW-universe column is the survivorship-bias control: it shares the
+    strategy's exact (survivor) universe, so strategy-minus-EW is the alpha
+    that is NOT explained by the universe's hindsight selection.
+    """
     strat = _curve_stats(result.equity_curve, name)
     bench = _curve_stats(result.benchmark_curve, "QQQ buy&hold")
     # Rebalance/regime diagnostics on the strategy row.
@@ -54,7 +59,10 @@ def compute_metrics(result, name: str = "strategy") -> list[dict]:
         strat["pct_invested"] = np.mean([r.regime_on for r in rbs]) if rbs else 0.0
         turns = [r.turnover for r in rbs if r.turnover > 0]
         strat["avg_turnover"] = float(np.mean(turns)) if turns else 0.0
-    return [strat, bench]
+    out = [strat, bench]
+    if getattr(result, "ew_universe_curve", None) is not None:
+        out.append(_curve_stats(result.ew_universe_curve, "EW-universe"))
+    return out
 
 
 def format_report(stats_list: list[dict]) -> str:

@@ -41,6 +41,7 @@ class Rebalance:
 class BTResult:
     equity_curve: pd.Series
     benchmark_curve: pd.Series
+    ew_universe_curve: pd.Series = None   # equal-weight buy&hold of same universe
     rebalances: list[Rebalance] = field(default_factory=list)
     weights_log: dict = field(default_factory=dict)   # dt -> {ticker: weight}
     final_equity: float = 0.0
@@ -138,9 +139,18 @@ def run_portfolio_backtest(
 
     eq = pd.Series(equity_curve, index=master)
     bench_curve = bench_close / bench_close.iloc[0] * cfg.initial_equity
+
+    # Equal-weight buy&hold of the SAME universe — a survivorship-bias control.
+    # Strategy and this benchmark share the identical (survivor) universe, so the
+    # gap between them isolates the alpha (momentum + regime), bias-neutral.
+    daily_ret = closes.pct_change()
+    ew_ret = daily_ret.mean(axis=1)               # avg across names available each day
+    ew_curve = (1 + ew_ret.fillna(0)).cumprod() * cfg.initial_equity
+
     return BTResult(
         equity_curve=eq,
         benchmark_curve=bench_curve,
+        ew_universe_curve=ew_curve,
         rebalances=rebalances,
         weights_log=weights_log,
         final_equity=float(eq.iloc[-1]),
