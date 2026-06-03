@@ -18,7 +18,7 @@ from datetime import datetime
 
 from .universe import UNIVERSE, BENCHMARK
 from .pit_universe import load_pit_universe, PIT_BENCHMARK
-from .data import load_prices, make_synthetic_prices
+from .data import load_prices, make_synthetic_prices, export_bundle, load_bundle
 from .alpha_momentum import MomentumConfig, make_alpha
 from .engine import BTConfig, run_portfolio_backtest
 from .metrics import compute_metrics, format_report, _curve_stats
@@ -99,12 +99,18 @@ def main():
     ap.add_argument("--cost", type=float, default=0.0010)
     ap.add_argument("--sweep", action="store_true",
                     help="momentum design sweep vs EW baseline (lookback/top_n/skip)")
+    ap.add_argument("--export-bundle", action="store_true",
+                    help="write a committed close-price bundle for the offline sandbox")
+    ap.add_argument("--bundle", action="store_true",
+                    help="load prices from the committed research bundle (no network)")
     args = ap.parse_args()
 
+    # --bundle implies the PIT universe (the bundle is built from PIT prices).
+    use_pit = args.pit or args.bundle
     eligibility = None
     benchmark_sym = BENCHMARK
-    if args.pit:
-        tickers, eligibility = load_pit_universe(refresh=args.refresh)
+    if use_pit:
+        tickers, eligibility = load_pit_universe(refresh=args.refresh and not args.bundle)
         benchmark_sym = PIT_BENCHMARK
         ended = sum(1 for _, e in eligibility.values() if e is not None)
         print(f"[run] PIT mode — {len(tickers)} S&P500 names "
@@ -112,7 +118,17 @@ def main():
     else:
         tickers = UNIVERSE
 
-    if args.synthetic:
+    if args.bundle:
+        print("[run] BUNDLE mode — loading committed research bundle (offline).")
+        prices = load_bundle()
+        if benchmark_sym not in prices:
+            raise SystemExit(f"benchmark {benchmark_sym} missing from bundle.")
+        benchmark = prices.pop(benchmark_sym)
+        cov = len(prices) / len(tickers) if tickers else 0
+        ended_got = sum(1 for t in prices if eligibility.get(t, (None, None))[1] is not None)
+        print(f"[run] bundle coverage: {len(prices)}/{len(tickers)} ({cov:.0%}); "
+              f"delisted fetched: {ended_got}")
+    elif args.synthetic:
         print("[run] SYNTHETIC mode — GBM data, engine mechanics check only.")
         allp = make_synthetic_prices(tickers + [benchmark_sym])
         benchmark = allp.pop(benchmark_sym)
@@ -128,16 +144,23 @@ def main():
         if not prices:
             raise SystemExit("no price data — run on a network-enabled machine first "
                              "(stooq is blocked in the web sandbox).")
-        if args.pit:
+        if use_pit:
             cov = len(prices) / len(tickers) if tickers else 0
             ended_got = sum(1 for t in prices if eligibility.get(t, (None, None))[1] is not None)
             print(f"[run] PIT price coverage: {len(prices)}/{len(tickers)} ({cov:.0%}); "
                   f"delisted names fetched: {ended_got}")
 
+    if args.export_bundle:
+        path = export_bundle(prices, extra={benchmark_sym: benchmark})
+        size_mb = os.path.getsize(path) / 1e6
+        print(f"[run] bundle exported: {path} ({size_mb:.1f} MB, "
+              f"{len(prices)+1} series incl. {benchmark_sym})")
+        return
+
     btcfg = BTConfig(initial_equity=args.equity, cost=args.cost)
 
     if args.sweep:
-        run_sweep(prices, benchmark, btcfg, eligibility, benchmark_sym, args.pit)
+        run_sweep(prices, benchmark, btcfg, eligibility, benchmark_sym, use_pit)
         return
 
     mcfg = MomentumConfig(lookback=args.lookback, top_n=args.top_n)
@@ -146,7 +169,7 @@ def main():
     stats = compute_metrics(result, name=f"Clenow top{args.top_n}", bench_name=benchmark_sym)
     report = format_report(stats)
 
-    uni = "S&P500 point-in-time" if args.pit else "NASDAQ survivor"
+    uni = "S&P500 point-in-time" if use_pit else "NASDAQ survivor"
     header = (f"Clenow Momentum [{uni}] — {len(prices)} stocks, "
               f"lookback={args.lookback}, top_n={args.top_n}, cost={args.cost:.2%}\n"
               f"period: {result.equity_curve.index[0].date()} .. "
