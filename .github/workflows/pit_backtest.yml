@@ -80,7 +80,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add backtest_us/ci_results/latest_pit.md backtest_us/data/sp500_ticker_start_end.csv
+          git add backtest_us/ci_results/latest_pit.md
           if git diff --staged --quiet; then
             echo "no changes"
           else

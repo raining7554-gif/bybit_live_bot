@@ -180,6 +180,10 @@ def run_portfolio_backtest(
     # holds every name *while listed* — including losers into their decline — which
     # is exactly the fair test the survivor universe could not provide.
     daily_ret = closes_live.pct_change()
+    # Safety net: cap per-name daily upside at +100% so a single residual data
+    # glitch cannot blow up the index. Downside is kept intact — delisting
+    # collapses are real and the EW benchmark must feel them.
+    daily_ret = daily_ret.clip(upper=1.0)
     ew_ret = daily_ret.mean(axis=1)               # avg across listed names each day
     ew_curve = (1 + ew_ret.fillna(0)).cumprod() * cfg.initial_equity
 
