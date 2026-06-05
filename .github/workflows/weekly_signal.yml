@@ -1,0 +1,77 @@
+name: Weekly Multi-Asset Signal
+
+# 매주 최신 시세로 멀티에셋 추세추종 목표비중을 계산해 레포에 기록(+텔레그램).
+# 사람이 이 비중대로 KIS에서 집행(L1 반자동). 월요일 09:00 UTC + 수동 실행.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * 1"   # 매주 월요일 09:00 UTC (18:00 KST)
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weekly-signal-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install pandas numpy requests yfinance
+
+      - name: Refresh asset prices
+        run: python -m backtest_us.assets_bundle --export
+
+      - name: Compute weekly signal
+        run: |
+          set -o pipefail
+          python -m backtest_us.strategy_multiasset | tee /tmp/sig.txt
+
+      - name: Write signal file
+        run: |
+          {
+            echo "# 📊 이번 주 멀티에셋 목표 비중"
+            echo ""
+            echo "- 생성: $(date -u +'%Y-%m-%d %H:%M UTC') (GitHub Actions)"
+            echo "- 규칙: 각 자산 200일선 위면 보유, 변동성 역가중, 추세 없으면 현금"
+            echo "- 집행: 이 비중대로 KIS에서 매수/조정 (크립토는 별도 계좌)"
+            echo ""
+            echo '```'
+            cat /tmp/sig.txt
+            echo '```'
+          } > backtest_us/ci_results/latest_signal.md
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f backtest_us/research_data/assets.csv.gz backtest_us/ci_results/latest_signal.md
+          if git diff --staged --quiet; then echo "no changes"; else
+            git commit -m "chore: weekly multi-asset signal $(date -u +%Y-%m-%d) [skip ci]"
+            git pull --rebase origin "${{ github.ref_name }}" || true
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
+
+      - name: Telegram notify (optional)
+        if: ${{ env.TG_TOKEN != '' && env.TG_CHAT_ID != '' }}
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os, requests
+          body=open('/tmp/sig.txt').read()[:3500]
+          requests.post(f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage",
+              json={"chat_id":os.environ['TG_CHAT_ID'],"text":"📊 이번 주 멀티에셋 목표비중\n\n"+body}, timeout=10)
+          PY

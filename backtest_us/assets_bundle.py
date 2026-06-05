@@ -30,8 +30,8 @@ ASSETS = [
 ]
 
 
-def export() -> str:
-    prices = load_prices(ASSETS, refresh=False)
+def export(refresh: bool = True) -> str:
+    prices = load_prices(ASSETS, refresh=refresh)
     cm = close_matrix(prices).round(4)
     os.makedirs(BUNDLE_DIR, exist_ok=True)
     cm.to_csv(ASSETS_CSV)
