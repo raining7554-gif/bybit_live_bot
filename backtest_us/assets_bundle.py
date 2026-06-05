@@ -1,0 +1,59 @@
+"""Macro multi-asset price bundle — for genuine cross-asset diversification.
+
+Within US equities, stacking strategies doesn't diversify (ROADMAP [3d]/[3i]:
+everything is the same beta, corr ~0.6-0.8). Real diversification comes from
+different ASSET CLASSES. This fetches a curated macro set so the regime/trend
+engine can run on each and allocate to whatever is actually trending — the
+managed-futures approach that genuinely spreads risk.
+
+  python -m backtest_us.assets_bundle --export   # (in CI, network) build bundle
+  from backtest_us.assets_bundle import load_assets
+  closes = load_assets()                          # date x asset close matrix
+"""
+from __future__ import annotations
+
+import os
+import pandas as pd
+
+from .data import load_prices, close_matrix, BUNDLE_DIR
+
+ASSETS_CSV = os.path.join(BUNDLE_DIR, "assets.csv.gz")
+
+# Curated cross-regime set (yfinance tickers). Spans risk-on / safe-haven /
+# real-assets / crypto so that in any macro regime SOMETHING tends to trend.
+ASSETS = [
+    "SPY", "QQQ", "EEM", "EFA",          # equities (US / growth / EM / intl)
+    "TLT", "IEF", "HYG",                 # bonds (long / mid treasury / high-yield)
+    "GLD", "SLV", "DBC",                 # gold / silver / broad commodities
+    "UUP", "VNQ",                        # US dollar / real estate
+    "BTC-USD", "ETH-USD",                # crypto
+]
+
+
+def export() -> str:
+    prices = load_prices(ASSETS, refresh=False)
+    cm = close_matrix(prices).round(4)
+    os.makedirs(BUNDLE_DIR, exist_ok=True)
+    cm.to_csv(ASSETS_CSV)
+    got = [c for c in cm.columns]
+    print(f"[assets] exported {ASSETS_CSV}: {len(got)} assets — {', '.join(got)}")
+    miss = [a for a in ASSETS if a not in got]
+    if miss:
+        print(f"[assets] MISSING (not fetched): {', '.join(miss)}")
+    return ASSETS_CSV
+
+
+def load_assets() -> pd.DataFrame:
+    if not os.path.exists(ASSETS_CSV):
+        raise SystemExit(f"no asset bundle at {ASSETS_CSV} — run the "
+                         "'Export Multi-Asset Bundle' workflow once.")
+    return pd.read_csv(ASSETS_CSV, index_col=0, parse_dates=True)
+
+
+if __name__ == "__main__":
+    import sys
+    if "--export" in sys.argv:
+        export()
+    else:
+        cm = load_assets()
+        print(cm.tail().round(2).to_string())

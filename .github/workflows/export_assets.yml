@@ -1,0 +1,45 @@
+name: Export Multi-Asset Bundle
+
+# 금·채권·비트코인 등 매크로 자산 가격을 받아 research_data/assets.csv.gz로 커밋.
+# 한 번 돌려두면 Claude가 멀티에셋 추세추종 전략을 자율 구축·검증한다. 입력 없음.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: export-assets-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install pandas numpy requests yfinance
+      - name: Fetch & export assets
+        run: |
+          set -o pipefail
+          python -m backtest_us.assets_bundle --export | tee /tmp/a.txt
+      - name: Commit bundle
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f backtest_us/research_data/assets.csv.gz
+          if git diff --staged --quiet; then
+            echo "no changes"
+          else
+            git commit -m "chore(backtest_us): refresh multi-asset bundle $(date -u +%Y-%m-%d) [skip ci]"
+            git pull --rebase origin "${{ github.ref_name }}" || true
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
