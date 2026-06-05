@@ -19,6 +19,9 @@ jobs:
   signal:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
     steps:
       - uses: actions/checkout@v4
         with:

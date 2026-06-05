@@ -1,0 +1,65 @@
+name: Telegram Setup / Test
+
+# 텔레그램 연동 도우미. TG_TOKEN 시크릿을 넣고 봇에게 아무 메시지나 보낸 뒤
+# 이 워크플로를 실행하면 → 당신의 chat_id를 찾아 출력한다.
+# TG_CHAT_ID 까지 넣었으면 → 테스트 메시지를 폰으로 보낸다.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+    steps:
+      - name: Check token & discover chat_id
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request
+          tok = os.environ.get("TG_TOKEN","").strip()
+          chat = os.environ.get("TG_CHAT_ID","").strip()
+          if not tok:
+              print("❌ TG_TOKEN 시크릿이 없습니다.")
+              print("   1) 텔레그램에서 @BotFather 와 대화 → /newbot → 토큰 복사")
+              print("   2) GitHub repo → Settings → Secrets and variables → Actions")
+              print("      → New repository secret → 이름 TG_TOKEN, 값=토큰")
+              raise SystemExit(0)
+
+          def api(method):
+              with urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/{method}", timeout=15) as r:
+                  return json.load(r)
+
+          me = api("getMe")
+          if not me.get("ok"):
+              print("❌ 토큰이 잘못됐습니다:", me); raise SystemExit(1)
+          print(f"✅ 봇 확인: @{me['result'].get('username')}")
+
+          ups = api("getUpdates")
+          chats = {}
+          for u in ups.get("result", []):
+              msg = u.get("message") or u.get("channel_post") or {}
+              c = msg.get("chat", {})
+              if c.get("id") is not None:
+                  chats[c["id"]] = c.get("title") or c.get("username") or c.get("first_name","")
+          if chats:
+              print("\n발견된 chat_id (봇에게 메시지를 보낸 대화):")
+              for cid, name in chats.items():
+                  print(f"  chat_id = {cid}   ({name})")
+              print("\n→ 위 chat_id 값을 TG_CHAT_ID 시크릿으로 추가하세요.")
+          else:
+              print("\n⚠️ 아직 메시지가 없습니다. 텔레그램에서 봇을 검색해 아무 글이나 보낸 뒤")
+              print("   이 워크플로를 다시 실행하면 chat_id가 나옵니다.")
+
+          if chat:
+              res = json.load(urllib.request.urlopen(urllib.request.Request(
+                  f"https://api.telegram.org/bot{tok}/sendMessage",
+                  data=json.dumps({"chat_id": chat,
+                      "text": "✅ 연동 성공! 매주 월요일 멀티에셋 목표비중을 여기로 보낼게요."}).encode(),
+                  headers={"Content-Type":"application/json"})))
+              print("\n테스트 메시지 전송:", "성공 ✅" if res.get("ok") else f"실패 — {res}")
+          PY
