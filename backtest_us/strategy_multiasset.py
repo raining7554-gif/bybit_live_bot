@@ -40,6 +40,8 @@ def _weekly(df: pd.DataFrame) -> pd.DataFrame:
 def compute(trend_ma=200, vol_win=60, cap=0.25, target_vol=0.10, lev_cap=1.0):
     """Return (weights, daily_returns, leverage) — weights are pre-leverage targets."""
     cm = load_assets().sort_index()
+    from .assets_bundle import MACRO
+    cm = cm[[c for c in MACRO if c in cm.columns]]   # CORE = macro only (sectors are a separate sleeve)
     cm = cm.reindex(cm["SPY"].dropna().index)        # align to trading days
     R = cm.pct_change()
 
