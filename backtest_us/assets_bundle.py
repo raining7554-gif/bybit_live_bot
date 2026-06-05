@@ -19,15 +19,31 @@ from .data import load_prices, close_matrix, BUNDLE_DIR
 
 ASSETS_CSV = os.path.join(BUNDLE_DIR, "assets.csv.gz")
 
-# Curated cross-regime set (yfinance tickers). Spans risk-on / safe-haven /
+# Curated cross-regime MACRO set (yfinance tickers). Spans risk-on / safe-haven /
 # real-assets / crypto so that in any macro regime SOMETHING tends to trend.
-ASSETS = [
+# This is the diversified CORE.
+MACRO = [
     "SPY", "QQQ", "EEM", "EFA",          # equities (US / growth / EM / intl)
     "TLT", "IEF", "HYG",                 # bonds (long / mid treasury / high-yield)
     "GLD", "SLV", "DBC",                 # gold / silver / broad commodities
     "UUP", "VNQ",                        # US dollar / real estate
     "BTC-USD", "ETH-USD",                # crypto
 ]
+
+# SECTOR / THEMATIC ETFs — for the momentum-rotation sleeve that LEANS INTO
+# whatever sector money is flooding (price = the flow signal). Trend-gated, so a
+# hot sector is ridden up and dropped when it breaks its 200-MA.
+SECTORS = [
+    "SMH", "SOXX",                       # semiconductors (the hot one)
+    "XLK", "XLC",                        # tech / communications
+    "XLE", "XLF", "XLV", "XLI",          # energy / financials / health / industrials
+    "XLY", "XLP", "XLU", "XLB",          # disc / staples / utilities / materials
+    "XBI", "GDX", "ARKK",                # biotech / gold miners / innovation
+    "TAN", "ICLN",                       # solar / clean energy
+]
+
+ASSETS = MACRO + SECTORS                  # full fetch list (one bundle)
+
 
 
 def export(refresh: bool = True) -> str:
