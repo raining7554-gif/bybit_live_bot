@@ -33,6 +33,18 @@ ASSETS = [
 def export(refresh: bool = True) -> str:
     prices = load_prices(ASSETS, refresh=refresh)
     cm = close_matrix(prices).round(4)
+
+    # Resilience: a transient yfinance miss must not wipe an asset (esp. SPY, the
+    # regime gauge). Merge fresh data over the previously committed bundle so any
+    # asset missing this run keeps its last good column.
+    if os.path.exists(ASSETS_CSV):
+        prev = pd.read_csv(ASSETS_CSV, index_col=0, parse_dates=True)
+        cm = cm.combine_first(prev) if len(cm) else prev
+        for c in prev.columns:
+            if c not in cm.columns:
+                cm[c] = prev[c]
+        cm = cm.sort_index()
+
     os.makedirs(BUNDLE_DIR, exist_ok=True)
     cm.to_csv(ASSETS_CSV)
     got = [c for c in cm.columns]
