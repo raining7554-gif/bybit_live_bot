@@ -30,17 +30,20 @@ EXCHANGE = {
 }
 SKIP = {"BTC-USD", "ETH-USD"}          # crypto -> bybit, not KIS
 EXECUTE = os.environ.get("REBALANCE_EXECUTE", "false").lower() == "true"
+# 점진(분할) 리밸런스: 매 실행마다 목표와의 격차 중 이 비율만 이동.
+# 주1회 실행시 0.25 = ~4주 분할. 백테스트상 즉시보다 Sharpe↑·낙폭↓·회전율↓.
+RAMP = float(os.environ.get("REBALANCE_RAMP", "0.25"))
 
 
 def _fmt(plan, total_usd, paper):
     head = ("🧪 모의(PAPER) " if paper else "💵 실전 ") + ("실행" if EXECUTE else "계획(드라이런)")
-    lines = [f"📊 멀티에셋 리밸런스 — {head}",
+    lines = [f"📊 멀티에셋 리밸런스 — {head}  (점진 {RAMP:.0%}/회)",
              f"총 평가액 ${total_usd:,.0f}", ""]
-    for t, w, tgt_usd, cur_usd, act in plan:
-        d = tgt_usd - cur_usd
-        arrow = "신규/추가" if d > 0 else ("축소" if d < 0 else "유지")
+    for t, w, tgt_usd, cur_usd, step in plan:
+        arrow = "매수" if step > 0 else ("매도" if step < 0 else "유지")
         lev = "⚡" if (t == "TQQQ" or t in SEC3X.values()) else ""
-        lines.append(f"{t:5}{lev} 목표 {w:4.1%} (${tgt_usd:,.0f})  현재 ${cur_usd:,.0f}  → {arrow} ${abs(d):,.0f}")
+        lines.append(f"{t:5}{lev} 목표 {w:4.1%}(${tgt_usd:,.0f}) 현재 ${cur_usd:,.0f}"
+                     f"  → 이번 {arrow} ${abs(step):,.0f}")
     return "\n".join(lines)
 
 
@@ -63,7 +66,8 @@ def main():
     for t, w in sorted(tgt.items(), key=lambda x: -x[1]):
         tgt_usd = w * total_usd
         cur_usd = float((holdings.get(t) or {}).get("eval_usd", 0.0))
-        plan.append((t, w, tgt_usd, cur_usd, tgt_usd - cur_usd))
+        step = RAMP * (tgt_usd - cur_usd)        # 이번 회차 이동분(분할)
+        plan.append((t, w, tgt_usd, cur_usd, step))
 
     msg = _fmt(plan, total_usd, paper)
     print(msg)
@@ -78,14 +82,14 @@ def main():
               "처음엔 KIS_PAPER=true 모의로 시작하세요.")
         return
 
-    # ---- EXECUTE: buys to reach target (v1: 진입/추가만; 매도 리밸런스는 다음 단계) ----
-    for t, w, tgt_usd, cur_usd, diff in plan:
-        if diff <= 5.0:                       # 이미 충분히 보유
+    # ---- EXECUTE: 이번 회차 분할분만큼 매수 (진입/추가). 매도 리밸런스는 다음 단계 ----
+    for t, w, tgt_usd, cur_usd, step in plan:
+        if step <= 5.0:                       # 매수분 미미하면 스킵
             continue
         exch = EXCHANGE.get(t, "NAS")
         try:
-            ot.buy_overseas(t, t, exch, reason="멀티에셋 리밸런스",
-                            full_allocation_usd=diff)
+            ot.buy_overseas(t, t, exch, reason="멀티에셋 점진 리밸런스",
+                            full_allocation_usd=step)
         except Exception as e:  # noqa: BLE001
             print(f"[order] {t} 실패: {e}")
 
