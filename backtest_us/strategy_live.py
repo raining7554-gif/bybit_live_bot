@@ -13,6 +13,8 @@ moment its underlying breaks its 200-day MA.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -90,12 +92,13 @@ def main():
     print(f"LIVE 섹터라이딩 혼합 (코어70+TQQQ15+섹터3x15, 2010~, net): "
           f"Sharpe={st['sharpe']:.2f} CAGR={st['cagr']:+.1%} MaxDD={st['mdd']:+.1%}")
 
-    print(f"\n=== 이번 주 목표 비중 (실거래 종목) — {asof.date()} ===")
+    cap = float(os.environ.get("CAPITAL_KRW", "5000000"))
+    print(f"\n=== 이번 주 목표 비중 (실거래 종목, {cap/1e4:,.0f}만원) — {asof.date()} ===")
     cash = 1 - sum(tgt.values())
     for k, v in sorted(tgt.items(), key=lambda x: -x[1]):
         tag = " ⚡3x" if k in ("TQQQ",) or k in SEC3X.values() else ""
-        print(f"  {k:6} {v:5.1%}{tag}")
-    print(f"  현금   {max(cash,0):5.1%}")
+        print(f"  {k:6} {v:5.1%}  {v*cap:>11,.0f}원{tag}")
+    print(f"  현금   {max(cash,0):5.1%}  {max(cash,0)*cap:>11,.0f}원")
 
     m = (1 + total.loc["2025-05-31":]).resample("ME").prod() - 1
     bal = 5_000_000
