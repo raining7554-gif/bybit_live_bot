@@ -39,14 +39,15 @@ jobs:
       - name: Compute weekly signal
         run: |
           set -o pipefail
-          python -m backtest_us.strategy_multiasset | tee /tmp/sig.txt
+          python -m backtest_us.strategy_live | tee /tmp/sig.txt
 
       - name: Write signal file
         run: |
           {
-            echo "# 📊 이번 주 멀티에셋 목표 비중"
+            echo "# 📊 이번 주 목표 비중 (섹터라이딩 혼합)"
             echo ""
             echo "- 생성: $(date -u +'%Y-%m-%d %H:%M UTC') (GitHub Actions)"
+            echo "- 구성: 코어70(멀티에셋 분산) + TQQQ15 + 섹터3x15(SOXL 등)"
             echo "- 규칙: 각 자산 200일선 위면 보유, 변동성 역가중, 추세 없으면 현금"
             echo "- 집행: 이 비중대로 KIS에서 매수/조정 (크립토는 별도 계좌)"
             echo ""
