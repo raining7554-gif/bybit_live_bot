@@ -16,9 +16,33 @@ Usage (on the machine that holds the KIS keys):
 """
 from __future__ import annotations
 
+import json
 import os
+import urllib.request
 
 from backtest_us.strategy_live import compute, SEC3X
+
+
+# 퀀트봇(멀티에셋 전략 전용) 텔레그램 — 기존 kis 봇(TELEGRAM_TOKEN)과 분리.
+# 이 전략의 신호/리밸런스 알림은 새 퀀트봇(TG_TOKEN/TG_CHAT_ID)으로만 보낸다.
+QUANT_TG_TOKEN = os.environ.get("TG_TOKEN", "")
+QUANT_TG_CHAT = os.environ.get("TG_CHAT_ID", "")
+
+
+def quant_telegram(msg: str) -> None:
+    """전용 퀀트봇으로 전송 (TG_TOKEN/TG_CHAT_ID). 미설정이면 콘솔만."""
+    if not QUANT_TG_TOKEN or not QUANT_TG_CHAT:
+        print("[퀀트봇] TG_TOKEN/TG_CHAT_ID 미설정 — 콘솔 출력만.")
+        return
+    try:
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{QUANT_TG_TOKEN}/sendMessage",
+            data=json.dumps({"chat_id": QUANT_TG_CHAT, "text": msg}).encode(),
+            headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:  # noqa: BLE001
+        print(f"[퀀트봇] 전송 실패: {e}")
+
 
 # KIS price-query exchange code per ticker (NAS=NASDAQ, AMS=NYSE Arca/AMEX).
 EXCHANGE = {
@@ -49,10 +73,6 @@ def _fmt(plan, total_usd, paper):
 
 def main():
     from kis import trader_overseas as ot
-    try:
-        from kis import telegram as tg
-    except Exception:
-        tg = None
     paper = os.environ.get("KIS_PAPER", "false").lower() == "true"
 
     _, tgt, asof = compute()
@@ -71,11 +91,7 @@ def main():
 
     msg = _fmt(plan, total_usd, paper)
     print(msg)
-    if tg is not None:
-        try:
-            tg.send_force(msg)
-        except Exception as e:  # noqa: BLE001
-            print(f"[telegram] skip: {e}")
+    quant_telegram(msg)          # 전용 퀀트봇으로 (기존 kis 봇과 분리)
 
     if not EXECUTE:
         print("\n[dry-run] REBALANCE_EXECUTE=true 로 실행하면 실제 주문합니다. "
