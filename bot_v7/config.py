@@ -72,7 +72,21 @@ ENTRY_MIN_SCORE   = 55.0
 # 데이터: 50건 -$94 손실 + 점수 역상관 (-5.3) + server_stop 56%
 # 70 점 이상은 추세 끝물 잡는 패턴 가설로 long ↔ short 반전
 # 환경변수로 임계치 조정 가능 (200 = 비활성)
-D_INVERSE_THRESHOLD = float(os.environ.get("D_INVERSE_THRESHOLD", "65"))
+# v6.63: 기본값 65 → 200 (실질 비활성). 트렌딩 시장에서 D_INV 가 손실 폭주 원인.
+# 트렌딩 레짐에선 절대 반전 금지, 레인징 레짐에서만 선별 사용 (regime gate 도입).
+D_INVERSE_THRESHOLD = float(os.environ.get("D_INVERSE_THRESHOLD", "200"))
+# v6.63: D_INV 는 ranging 레짐 + 매우 높은 점수 (90+) 에서만 발동 허용
+# regime 분류가 'ranging' 이고 점수 >= D_INVERSE_RANGING_MIN 일 때만 인버스 적용
+D_INVERSE_REGIME_GATED = os.environ.get("D_INVERSE_REGIME_GATED", "true").lower() == "true"
+D_INVERSE_RANGING_MIN = float(os.environ.get("D_INVERSE_RANGING_MIN", "85"))
+
+# v6.63: 레짐 기반 전략 선택 (김민겸 다전략 풀 접근)
+# trending → D 만 (no inverse, trend ride)
+# ranging  → MR 만 (no D, mean revert)
+# mixed    → 둘 다 micro 사이즈로
+REGIME_GATED_STRATEGY = os.environ.get("REGIME_GATED", "true").lower() == "true"
+# 레짐 확신도가 이 임계 이하면 게이트 무시 (분류 불확실 = 보수적 패스스루)
+REGIME_GATE_MIN_CONF = float(os.environ.get("REGIME_GATE_MIN_CONF", "0.55"))
 
 # v6.54: mid/high tier (점수 80+) 사이즈 캡
 # 데이터 (30일): mid 10건 -$98 / high 6건 -$74 = 16건 -$172
@@ -88,6 +102,11 @@ LEV_TIER_PROBE    = 5.0
 LEV_TIER_BASE     = 10.0
 LEV_TIER_MID      = 15.0
 LEV_TIER_HIGH     = 20.0
+
+# v6.63: 최대 레버리지 하드 캡 (env 로 조정)
+# 학술 권고 (Quarter-Kelly): BTC 60% 연변동 가정 시 5x 부근이 합리적.
+# 사용자 기존 운영 호환 위해 default 20 유지. 보수 운영시 5~10 권장.
+MAX_LEVERAGE_CAP  = float(os.environ.get("MAX_LEVERAGE_CAP", "20.0"))
 
 # Per-tier exit policy v9 — option A (more extreme on both ends):
 #   low tiers cash out faster (smaller TP)
@@ -179,8 +198,17 @@ BLOCKED_HOURS_KST_SET = _parse_blocked_hours()
 DAILY_LOSS_REST_PCT = float(os.environ.get("DAILY_LOSS_REST_PCT", "0.03"))   # -3%
 
 # v6.33B: AI Final Gate — 진입 직전 Gemini 한 번 더 호출
+# v6.63: Gemini quota 절약 — (symbol, side) 별 1800s 쓰로틀, mid 이상만 호출
 AI_FINAL_GATE_ENABLED = os.environ.get("AI_FINAL_GATE_ENABLED", "true").lower() == "true"
-AI_FINAL_GATE_MIN_TIER = os.environ.get("AI_FINAL_GATE_MIN_TIER", "base")  # base 이상만 (작은 진입은 통과)
+AI_FINAL_GATE_MIN_TIER = os.environ.get("AI_FINAL_GATE_MIN_TIER", "mid")  # v6.63: base → mid
+AI_FINAL_GATE_THROTTLE_SEC = int(os.environ.get("AI_FINAL_GATE_THROTTLE_SEC", "1800"))
+
+# v6.63: pattern_check 쓰로틀 (intelligence/agent.py 의 Gemini 콜)
+# 같은 (symbol, direction) 신호가 짧은 시간 안에 반복되면 한 번만 호출
+AI_PATTERN_CHECK_ENABLED = os.environ.get("AI_PATTERN_CHECK_ENABLED", "true").lower() == "true"
+AI_PATTERN_THROTTLE_SEC = int(os.environ.get("AI_PATTERN_THROTTLE_SEC", "3600"))
+# pattern_check 도 mid 이상만 (작은 사이즈 진입엔 호출 X)
+AI_PATTERN_MIN_TIER = os.environ.get("AI_PATTERN_MIN_TIER", "mid")
 
 # v6.34 B5: 상관관계 디텍터 — BTC 큰 움직임시 알트도 따라감 가정
 # BTC 가 4H 기준 같은 방향으로 큰 움직임 → 알트 같은 방향 진입 부스트
@@ -212,6 +240,16 @@ CLAUDE_AGENT_ENABLED = os.environ.get("CLAUDE_AGENT_ENABLED", "true").lower() ==
 # 24 사이클/일 × multi-iteration = 너무 빠른 소진 → 4 사이클/일로
 CLAUDE_AGENT_INTERVAL_SEC = int(os.environ.get("CLAUDE_AGENT_INTERVAL_SEC", "21600"))  # 6시간
 CLAUDE_AGENT_MODEL = os.environ.get("CLAUDE_AGENT_MODEL", "claude-sonnet-4-6")
+
+# ─── Swing 모드 (v6.63: 4H 고확신 추세 장기 보유) ──────────────
+# trending 레짐 + 강한 4H ADX + 다중 심볼 컨플루언스 일치 시 활성
+# 15m 노이즈 무시, 1H/4H 시그널만 청산 트리거. 트레일 더 넓게.
+SWING_MODE_ENABLED = os.environ.get("SWING_MODE_ENABLED", "true").lower() == "true"
+SWING_ADX_4H_MIN = float(os.environ.get("SWING_ADX_4H_MIN", "30.0"))
+SWING_CROSS_AGREE_MIN = float(os.environ.get("SWING_CROSS_AGREE_MIN", "0.7"))
+SWING_TRAIL_ATR_MULT = float(os.environ.get("SWING_TRAIL_ATR_MULT", "5.0"))
+# swing 포지션은 mid/high 사이즈 캡 무시 — 추세 큰 거 잡는 게 목적
+SWING_TIER_CAP_BYPASS = os.environ.get("SWING_TIER_CAP_BYPASS", "true").lower() == "true"
 
 # Refresh OHLCV cache every N seconds within a loop iteration (avoid spam)
 CACHE_15M_SEC = 30

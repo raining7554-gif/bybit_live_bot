@@ -42,6 +42,10 @@ _last_regime_log_ts: dict[str, float] = {}     # symbol → DB 마지막 기록 
 _positions: dict[str, dict] = {}        # symbol → 포지션 dict
 _last_loss_ts: dict[str, float] = {}    # symbol → 마지막 손절 시각 (cooldown)
 
+# v6.63: Gemini 콜 쓰로틀 — (symbol, side|direction) → 마지막 호출 ts
+_last_gate_check_ts: dict[tuple, float] = {}
+_last_pattern_check_ts: dict[tuple, float] = {}
+
 
 KST = timezone(timedelta(hours=9))
 
@@ -332,25 +336,40 @@ def _try_open(symbol: str, equity: float, signal: dict,
     if entry_price <= 0:
         return
 
-    # v6.33B: AI Final Gate (base 이상 tier 만 — 작은 진입은 통과)
-    if (cfg.AI_FINAL_GATE_ENABLED and not is_mr
-            and signal.get("tier") in ("base", "mid", "high")):
-        try:
-            gate = ai.gate_check(symbol, signal, snapshot)
-            if not gate.get("approved", True):
-                tg.send(
-                    f"🚫 [{_short(symbol)}] AI 게이트 거부 (위험 {gate.get('risk', '?')})\n"
-                    f"사유: {gate.get('reason', '')}"
-                )
-                return
-            # 위험 high 면 통과해도 알림 (수동 확인 가능)
-            if gate.get("risk") == "high":
-                tg.send(
-                    f"⚠️ [{_short(symbol)}] AI 게이트 위험 high (통과)\n"
-                    f"사유: {gate.get('reason', '')}"
-                )
-        except Exception as e:
-            print(f"[AI gate {symbol}] err: {e}", flush=True)
+    # v6.33B → v6.63: AI Final Gate
+    # - min tier: config 로 통제 (기본 mid)
+    # - 쓰로틀: (symbol, side) 별 N초 1회 (Gemini quota 절약)
+    _gate_min_tier = cfg.AI_FINAL_GATE_MIN_TIER
+    _tier_order = ["micro", "probe", "base", "mid", "high", "swing"]
+    cur_tier = signal.get("tier", "base")
+    try:
+        gate_active = (_tier_order.index(cur_tier)
+                       >= _tier_order.index(_gate_min_tier))
+    except ValueError:
+        gate_active = False
+    if cfg.AI_FINAL_GATE_ENABLED and not is_mr and gate_active:
+        gkey = (symbol, side)
+        last_gate = _last_gate_check_ts.get(gkey, 0.0)
+        if time.time() - last_gate < cfg.AI_FINAL_GATE_THROTTLE_SEC:
+            pass  # 쓰로틀 — 스킵 (gate 통과로 간주)
+        else:
+            try:
+                gate = ai.gate_check(symbol, signal, snapshot)
+                _last_gate_check_ts[gkey] = time.time()
+                if not gate.get("approved", True):
+                    tg.send(
+                        f"🚫 [{_short(symbol)}] AI 게이트 거부 (위험 {gate.get('risk', '?')})\n"
+                        f"사유: {gate.get('reason', '')}"
+                    )
+                    return
+                # 위험 high 면 통과해도 알림 (수동 확인 가능)
+                if gate.get("risk") == "high":
+                    tg.send(
+                        f"⚠️ [{_short(symbol)}] AI 게이트 위험 high (통과)\n"
+                        f"사유: {gate.get('reason', '')}"
+                    )
+            except Exception as e:
+                print(f"[AI gate {symbol}] err: {e}", flush=True)
 
     if not ex.set_leverage(symbol, lev):
         tg.send(f"⚠️ [{_short(symbol)}] 레버리지 설정 실패 → 진입 보류")
@@ -359,15 +378,27 @@ def _try_open(symbol: str, equity: float, signal: dict,
     sizing_tier = "mr" if is_mr else signal.get("tier", "base")
     score = signal.get("score") or 0
 
-    # v15 Tier 1: 과거 비슷한 거래 패턴 매칭 (D 전략만)
-    if not is_mr and snapshot:
+    # v15 → v6.63: 패턴 매칭 (D 전략만, mid 이상 + 쓰로틀)
+    # Gemini quota 절약. 작은 사이즈 진입엔 호출 안 함.
+    _pat_min_tier = cfg.AI_PATTERN_MIN_TIER
+    try:
+        pat_active = (_tier_order.index(cur_tier)
+                      >= _tier_order.index(_pat_min_tier))
+    except ValueError:
+        pat_active = False
+    direction = "long" if side == "Buy" else "short"
+    pkey = (symbol, direction)
+    pat_throttled = (time.time() - _last_pattern_check_ts.get(pkey, 0.0)
+                     < cfg.AI_PATTERN_THROTTLE_SEC)
+    if (cfg.AI_PATTERN_CHECK_ENABLED and not is_mr and snapshot
+            and pat_active and not pat_throttled):
         try:
             from intelligence import agent as _ag
-            direction = "long" if side == "Buy" else "short"
             pattern = _ag.pattern_check(
                 bot_id=ai.BOT_ID, symbol=symbol,
                 direction=direction, current_snapshot=snapshot,
             )
+            _last_pattern_check_ts[pkey] = time.time()
             if pattern:
                 pat_mult = _ag.pattern_to_multiplier(pattern)
                 score_after = score * pat_mult
@@ -434,20 +465,27 @@ def _try_open(symbol: str, equity: float, signal: dict,
     # v6.41 A → v6.48: mid/high tier 서버사이드 trailing stop 등록
     # 봇 sleep 무관 — Bybit 가 tick 단위로 trail 추적
     # v6.48: trail 거리 좁힘 (이전 trail 너무 넓어 +25% → -15% 패턴 발생)
+    # v6.63: swing tier 도 서버 trail 등록 (가장 넓게)
     tier_for_trail = signal.get("tier", "base")
-    if tier_for_trail in ("mid", "high") and not is_mr:
+    if tier_for_trail in ("mid", "high", "swing") and not is_mr:
         atr_v = signal["atr_15m"]
         if atr_v > 0:
-            # v6.48: 활성 늦춤 + trail 거리 좁힘
-            # activate at +1×ATR (was +0.5) — 충분히 수익난 후에만 활성
-            # trail high 1×ATR (was 2×), mid 0.75×ATR (was 1.5×)
-            trail_dist = 0.75 * atr_v if tier_for_trail == "mid" else 1.0 * atr_v
-            activate = entry_price + 1.0 * atr_v if side == "Buy" \
-                       else entry_price - 1.0 * atr_v
+            if tier_for_trail == "swing":
+                # swing: SWING_TRAIL_ATR_MULT × ATR, 활성도 늦게
+                trail_dist = cfg.SWING_TRAIL_ATR_MULT * atr_v
+                activate_offset = 1.5 * atr_v
+            elif tier_for_trail == "mid":
+                trail_dist = 0.75 * atr_v
+                activate_offset = 1.0 * atr_v
+            else:  # high
+                trail_dist = 1.0 * atr_v
+                activate_offset = 1.0 * atr_v
+            activate = entry_price + activate_offset if side == "Buy" \
+                       else entry_price - activate_offset
             ok_trail = ex.set_server_trailing(symbol, trail_dist, activate)
             if ok_trail:
-                print(f"[{symbol}] 서버 trail 등록 — 거리={trail_dist:.2f} "
-                      f"activate={activate:.2f}", flush=True)
+                print(f"[{symbol}] 서버 trail 등록 ({tier_for_trail}) "
+                      f"— 거리={trail_dist:.2f} activate={activate:.2f}", flush=True)
 
     _positions[symbol] = {
         "side": side, "entry": entry_price, "size": qty,
@@ -459,10 +497,11 @@ def _try_open(symbol: str, equity: float, signal: dict,
         "tp_price": signal.get("tp_price"),
         "tier": signal.get("tier", "high"),
         "tp_margin": signal.get("tp_margin"),
-        # v6.28: D_INV (reverse) 트레이드 추적
+        # v6.28 → v6.63: D_INV, SWING 트레이드 추적
         "strategy": (
             "MR" if is_mr
-            else ("D_INV" if signal.get("inverse") else "D")
+            else ("SWING" if signal.get("swing")
+                  else ("D_INV" if signal.get("inverse") else "D"))
         ),
         "opened_ts": time.time(),
         "entry_snapshot": snapshot or {},
@@ -472,7 +511,14 @@ def _try_open(symbol: str, equity: float, signal: dict,
     st.save_all(_positions)
 
     side_kr = "롱" if side == "Buy" else "숏"
-    icon = "〰️ MR" if is_mr else "📈 D"
+    if is_mr:
+        icon = "〰️ MR"
+    elif signal.get("swing"):
+        icon = "🌊 SWING"
+    elif signal.get("inverse"):
+        icon = "↩️ D_INV"
+    else:
+        icon = "📈 D"
     notional = qty * entry_price
     sw_str = f" (가중치 {sw:.2f}x)" if abs(sw - 1.0) > 0.05 else ""
     tg.send(
@@ -1219,27 +1265,34 @@ def main():
     handlers = _setup_handlers()
     n = len(cfg.SYMBOLS)
     sym_label = ", ".join(_short(s) for s in cfg.SYMBOLS)
+    regime_str = "ON" if cfg.REGIME_GATED_STRATEGY else "OFF"
+    swing_str = "ON" if cfg.SWING_MODE_ENABLED else "OFF"
+    dinv_str = ("OFF" if cfg.D_INVERSE_THRESHOLD >= 100
+                else f"ranging+score≥{cfg.D_INVERSE_RANGING_MIN:.0f}")
     tg.send(
-        f"🚀 v5.0 시작 — Mean Reversion primary ({n}종, mode={cfg.STRATEGY_MODE})\n"
+        f"🚀 v6.63 시작 — Regime-Gated 다전략 풀 ({n}종, mode={cfg.STRATEGY_MODE})\n"
         f"봇: {bot_label}\n"
         f"심볼: {sym_label} | 잔고: ${eq0:,.2f}\n"
-        f"━ D 전략 (점수×tier 마진) ━\n"
-        f"  base: ADX + BB + Vol + MTF (0~100)\n"
-        f"  ×멀티: 4H ADX, 펀딩 sanity, 펀딩 추세\n"
-        f"          cross-asset, 변동성 regime, OI\n"
-        f"  margin = tier × (score/100)^{cfg.SCORE_EXP:.1f}\n"
-        f"  55-59 → 3x  / TP +2%\n"
-        f"  60-69 → 5x  / TP +3%\n"
-        f"  70-79 → 10x / TP +6%\n"
-        f"  80-89 → 15x / TP1+10% → 3.0×ATR\n"
-        f"  90+   → 20x / 4.0×ATR\n"
+        f"━ 전략 라우터 (v6.63 신규) ━\n"
+        f"  trending → D + 🌊SWING (no MR)\n"
+        f"  ranging  → MR (no D)\n"
+        f"  mixed    → 둘 다, micro 사이즈\n"
+        f"  레짐 게이트: {regime_str} (확신 ≥{cfg.REGIME_GATE_MIN_CONF})\n"
+        f"  스윙 모드: {swing_str} (ADX4H≥{cfg.SWING_ADX_4H_MIN:.0f}, "
+        f"trail {cfg.SWING_TRAIL_ATR_MULT:.1f}×ATR)\n"
+        f"  D_INV: {dinv_str}\n"
+        f"━ D 전략 점수 tier ━\n"
+        f"  55-59 → 3x / TP +2%   60-69 → 5x / TP +3%\n"
+        f"  70-79 → 10x / TP +6%  80-89 → 15x (캡: base)\n"
+        f"  90+  → 20x (캡: base)  레버리지 상한 {cfg.MAX_LEVERAGE_CAP:.0f}x\n"
         f"━ 글로벌 캡 ━\n"
         f"  활성 포지션 합계 마진 ≤ {cfg.MAX_TOTAL_MARGIN*100:.0f}%\n"
-        f"  진입 실패시 90분 cooldown\n"
         f"━ MR — 5x / BB 중간선 TP / 마진 50%\n"
+        f"━ AI Gemini 쓰로틀 (v6.63) ━\n"
+        f"  gate min={cfg.AI_FINAL_GATE_MIN_TIER} × {cfg.AI_FINAL_GATE_THROTTLE_SEC}s\n"
+        f"  pattern min={cfg.AI_PATTERN_MIN_TIER} × {cfg.AI_PATTERN_THROTTLE_SEC}s\n"
         f"━ 안전 ━\n"
-        f"자동 정지 OFF (수동 /halt)\n"
-        f"서버사이드 -2% SL 부착\n"
+        f"자동 정지 OFF (수동 /halt) | 서버사이드 -2% SL\n"
         f"명령: /status /score /ai /review /propose /lessons /symbols /weights /regime /halt /resume\n"
         f"⏰ KST 정각 리포트\n"
         f"🧠 AI: {'ON (' + cfg.AI_MODEL + ')' if (cfg.AI_ENABLED and cfg.GEMINI_API_KEY) else 'OFF'}"
@@ -1341,32 +1394,68 @@ def main():
                         if time.time() - last_loss > cfg.COOLDOWN_BARS_LOSS * 15 * 60:
                             snap = ai.market_snapshot(df15, df1h, df4h)
 
-                            # v5.0: STRATEGY_MODE 별 진입 평가
+                            # v6.63: 레짐 게이트 — 김민겸 다전략 풀 접근
+                            #   trending → D + swing 만 (no MR)
+                            #   ranging  → MR 만 (no D, no swing)
+                            #   mixed    → 둘 다 가능하지만 micro 만
+                            reg = _last_regime.get(symbol)
+                            reg_label = reg.get("regime", "?") if reg else "?"
+                            reg_conf = float(reg.get("confidence", 0)) if reg else 0.0
                             mode = cfg.STRATEGY_MODE
-                            sig = None
 
-                            if mode in ("D", "BOTH"):
-                                # v14/v15: 8-component 신호 검증 데이터 수집
-                                cross_agree = _compute_cross_agree(symbol, symbol_trends)
-                                funding_hist = ex.get_funding_history(symbol, count=4)
-                                funding_now = funding_hist[0] if funding_hist else None
-                                funding_24h = funding_hist[3] if (funding_hist and len(funding_hist) >= 4) else None
-                                oi_info = ex.get_open_interest_trend(symbol)
-                                oi_change_4h = oi_info["change_pct"] if oi_info else None
-                                try:
-                                    if len(df4h) >= 2:
-                                        p_now = float(df4h.iloc[-1].close)
-                                        p_past = float(df4h.iloc[-2].close)
-                                        price_change_4h = (p_now - p_past) / p_past if p_past > 0 else None
-                                    else:
-                                        price_change_4h = None
-                                except Exception:
+                            allow_d = True
+                            allow_mr = True
+                            cap_to_micro = False
+                            if (cfg.REGIME_GATED_STRATEGY
+                                    and reg and reg_conf >= cfg.REGIME_GATE_MIN_CONF):
+                                if reg_label == "trending":
+                                    allow_d, allow_mr = True, False
+                                elif reg_label == "ranging":
+                                    allow_d, allow_mr = False, True
+                                elif reg_label == "mixed":
+                                    allow_d, allow_mr = True, True
+                                    cap_to_micro = True
+
+                            # v5.0: STRATEGY_MODE 마스킹 (사용자 override)
+                            if mode == "D":
+                                allow_mr = False
+                            elif mode == "MR":
+                                allow_d = False
+                            # BOTH 면 레짐 게이트 그대로
+
+                            sig = None
+                            cross_agree = _compute_cross_agree(symbol, symbol_trends)
+
+                            # v14/v15: 신호 검증 데이터 수집 (D / swing 모두 사용)
+                            funding_hist = ex.get_funding_history(symbol, count=4)
+                            funding_now = funding_hist[0] if funding_hist else None
+                            funding_24h = funding_hist[3] if (funding_hist and len(funding_hist) >= 4) else None
+                            oi_info = ex.get_open_interest_trend(symbol)
+                            oi_change_4h = oi_info["change_pct"] if oi_info else None
+                            try:
+                                if len(df4h) >= 2:
+                                    p_now = float(df4h.iloc[-1].close)
+                                    p_past = float(df4h.iloc[-2].close)
+                                    price_change_4h = (p_now - p_past) / p_past if p_past > 0 else None
+                                else:
                                     price_change_4h = None
-                                try:
-                                    from . import news as _news
-                                    news_sent = _news.get_news_sentiment(symbol)
-                                except Exception:
-                                    news_sent = None
+                            except Exception:
+                                price_change_4h = None
+                            try:
+                                from . import news as _news
+                                news_sent = _news.get_news_sentiment(symbol)
+                            except Exception:
+                                news_sent = None
+
+                            # v6.63: trending 레짐 + 강한 4H ADX = swing 우선 시도
+                            if allow_d and cfg.SWING_MODE_ENABLED:
+                                sig = strat.evaluate_swing_entry(
+                                    df15, df1h, df4h, regime=reg,
+                                    cross_agree=cross_agree,
+                                    funding_8h_pct=funding_now,
+                                )
+
+                            if not sig and allow_d and mode in ("D", "BOTH"):
                                 sig = strat.evaluate_entry(
                                     df15, df1h, df4h,
                                     funding_8h_pct=funding_now,
@@ -1375,11 +1464,17 @@ def main():
                                     oi_change_4h=oi_change_4h,
                                     price_change_4h=price_change_4h,
                                     news_sentiment=news_sent,
+                                    regime=reg,
                                 )
 
-                            # v5.0 MR primary mode (또는 D 가 신호 없을 때 fallback)
-                            if not sig and mode in ("MR", "BOTH"):
+                            # v5.0 MR (또는 D 가 신호 없을 때 fallback)
+                            if not sig and allow_mr and mode in ("MR", "BOTH"):
                                 sig = strat.evaluate_mr_entry(df15, df4h)
+
+                            # mixed 레짐 = micro 사이즈로 강제
+                            if sig and cap_to_micro and sig.get("tier") not in ("micro", "mr_low"):
+                                sig["tier"] = "micro"
+                                sig["leverage"] = cfg.LEV_TIER_MICRO
 
                             if sig:
                                 _try_open(symbol, equity, sig, snap,
