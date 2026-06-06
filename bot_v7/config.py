@@ -108,26 +108,40 @@ LEV_TIER_HIGH     = 20.0
 # 사용자 기존 운영 호환 위해 default 20 유지. 보수 운영시 5~10 권장.
 MAX_LEVERAGE_CAP  = float(os.environ.get("MAX_LEVERAGE_CAP", "20.0"))
 
+# v6.64: 최소 R:R 필터 (수수료 차감 후)
+# 승률 좋은데 마이너스 = R:R 비대칭. 수수료 차감 net_TP/net_SL 비율이
+# MIN_RR_FILTER 미만이면 진입 차단. 1.3 = 보수적, 1.5 = 적극적 필터.
+# 0.0 = 비활성 (기존 동작 유지).
+MIN_RR_FILTER     = float(os.environ.get("MIN_RR_FILTER", "1.2"))
+# Bybit V5 taker 수수료 — R:R 계산용. perp 무기한 기준.
+TAKER_FEE_BPS     = float(os.environ.get("TAKER_FEE_BPS", "5.5"))   # 0.055%
+
 # Per-tier exit policy v9 — option A (more extreme on both ends):
 #   low tiers cash out faster (smaller TP)
 #   high tiers trail wider (let trends run)
-TP_MARGIN_MICRO   = 0.02   # micro: +2% margin → close (was +3%)
-TP_MARGIN_PROBE   = 0.03   # probe: +3% margin → close (was +5%)
-TP_MARGIN_BASE    = 0.06   # base:  +6% margin → close (was +10%)
-TP1_MARGIN_MID    = 0.10   # mid:   TP1 +10% partial 50% → BE+trail rest
+# v6.64: 승률 좋은데 마이너스 = R:R 비대칭 + 수수료 문제 해결
+# - 10x 레버리지에서 왕복 taker 수수료만 2.2% 마진
+# - 기존 TP base +6% 마진 → 수수료 차감 후 +3.8% / 손절 -8.2%
+# - 손익분기 승률 68% 요구 → 65% 승률에도 마이너스
+# 해결: TP 거리 확대 (R:R 1.5:1 이상 확보)
+TP_MARGIN_MICRO   = 0.04   # v6.64: 2% → 4% (3x 에서도 수수료 0.66% 차감 후 net +3.3%)
+TP_MARGIN_PROBE   = 0.06   # v6.64: 3% → 6% (5x 수수료 1.1% 차감 후 net +4.9%)
+TP_MARGIN_BASE    = 0.10   # v6.64: 6% → 10% (10x 수수료 2.2% 차감 후 net +7.8%)
+TP1_MARGIN_MID    = 0.12   # v6.64: 10% → 12% (mid TP1 더 멀리)
 TP_MARGIN_HIGH    = None   # high:  no fixed TP — BE+trail only
 
 # v6.32: 2단계 분할 익절 + Dynamic trail (mid/high tier)
 # 사용자 케이스: BNB +$100 정점 → 풀백 → 트레일 발동 못함 → 수익 토함
 # 해결: 일찍 일부 잠금 + 수익 클수록 trail 조여짐
-# Mid tier 2단계 (current TP1 +10% 50% → 30/30/40 분할)
-TP1_RATIO_MID     = 0.30   # mid TP1 (+10% margin) 30% 청산
-TP2_MARGIN_MID    = 0.20   # mid TP2 (+20% margin)
-TP2_RATIO_MID     = 0.30   # mid TP2 30% 청산 (누적 60%)
-# High tier 2단계 분할 익절 신규
-TP1_MARGIN_HIGH   = 0.05   # high TP1 +5% margin → 30% 청산
-TP1_RATIO_HIGH    = 0.30
-TP2_MARGIN_HIGH   = 0.15   # high TP2 +15% margin → 30% 청산 (누적 60%)
+# v6.64: 승률 좋은데 마이너스 → TP1 청산 비율 30% → 50% 확대
+# (작은 wins 가 트레일 BE 까지 되돌아가서 +1.5% 만 챙기던 문제)
+TP1_RATIO_MID     = 0.50   # v6.64: 30% → 50% (mid TP1 +12% 에서 절반 청산)
+TP2_MARGIN_MID    = 0.22   # v6.64: 20% → 22% (TP1 멀어진 만큼)
+TP2_RATIO_MID     = 0.30   # mid TP2 30% 청산 (누적 80%)
+# High tier 2단계 분할 익절
+TP1_MARGIN_HIGH   = 0.08   # v6.64: 5% → 8% (수수료 차감 후 +5.8% 확보)
+TP1_RATIO_HIGH    = 0.50   # v6.64: 30% → 50%
+TP2_MARGIN_HIGH   = 0.18   # v6.64: 15% → 18%
 TP2_RATIO_HIGH    = 0.30
 # Dynamic trail — 수익 클수록 trail 조여짐 (high tier 만)
 DYNAMIC_TRAIL_ENABLED   = True

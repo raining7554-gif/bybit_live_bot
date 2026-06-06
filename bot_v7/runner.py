@@ -446,6 +446,36 @@ def _try_open(symbol: str, equity: float, signal: dict,
                   flush=True)
         return
 
+    # v6.64: 최소 R:R 필터 — 수수료 차감 net 기준.
+    # high/swing tier (TP=None, 트레일만) 는 통과 — TP1 도 mid 만 fixed.
+    # MR 도 통과 — BB middle 까지 거리는 동적이라 사전 계산 X.
+    tp_margin_for_rr = signal.get("tp_margin")
+    if (cfg.MIN_RR_FILTER > 0 and tp_margin_for_rr is not None
+            and not is_mr and not signal.get("swing")):
+        try:
+            sl_price = float(signal.get("stop_price", 0))
+            if sl_price > 0:
+                sl_dist_pct = abs(entry_price - sl_price) / entry_price
+                sl_margin = sl_dist_pct * lev
+                # 왕복 taker 수수료 (margin 기준 = bps × 2 × leverage)
+                fee_margin = (cfg.TAKER_FEE_BPS / 10000.0) * 2.0 * lev
+                net_tp = tp_margin_for_rr - fee_margin
+                net_sl = sl_margin + fee_margin
+                rr = net_tp / max(0.001, net_sl)
+                if rr < cfg.MIN_RR_FILTER:
+                    # 같은 신호 반복 알림 방지 — 30 루프마다 1회만
+                    if _loop_count % 30 == 1:
+                        tg.send(
+                            f"⏸️ [{_short(symbol)}] R:R 필터 — net "
+                            f"{rr:.2f}<{cfg.MIN_RR_FILTER:.1f}\n"
+                            f"  TP {tp_margin_for_rr*100:.1f}% / SL "
+                            f"{sl_margin*100:.1f}% / 수수료 {fee_margin*100:.1f}%"
+                        )
+                    _last_loss_ts[symbol] = time.time()  # cooldown
+                    return
+        except Exception as e:
+            print(f"[RR filter {symbol}] err: {e}", flush=True)
+
     disaster_sl = entry_price * (1 - cfg.DISASTER_SL_PCT) if side == "Buy" \
                   else entry_price * (1 + cfg.DISASTER_SL_PCT)
 
@@ -1281,10 +1311,14 @@ def main():
         f"  스윙 모드: {swing_str} (ADX4H≥{cfg.SWING_ADX_4H_MIN:.0f}, "
         f"trail {cfg.SWING_TRAIL_ATR_MULT:.1f}×ATR)\n"
         f"  D_INV: {dinv_str}\n"
-        f"━ D 전략 점수 tier ━\n"
-        f"  55-59 → 3x / TP +2%   60-69 → 5x / TP +3%\n"
-        f"  70-79 → 10x / TP +6%  80-89 → 15x (캡: base)\n"
+        f"━ D 전략 점수 tier (v6.64: R:R 보정) ━\n"
+        f"  55-59 → 3x / TP +{cfg.TP_MARGIN_MICRO*100:.0f}%   "
+        f"60-69 → 5x / TP +{cfg.TP_MARGIN_PROBE*100:.0f}%\n"
+        f"  70-79 → 10x / TP +{cfg.TP_MARGIN_BASE*100:.0f}%  "
+        f"80-89 → 15x (캡: base)\n"
         f"  90+  → 20x (캡: base)  레버리지 상한 {cfg.MAX_LEVERAGE_CAP:.0f}x\n"
+        f"  mid TP1 +{cfg.TP1_MARGIN_MID*100:.0f}% × {cfg.TP1_RATIO_MID*100:.0f}% / "
+        f"high TP1 +{cfg.TP1_MARGIN_HIGH*100:.0f}% × {cfg.TP1_RATIO_HIGH*100:.0f}%\n"
         f"━ 글로벌 캡 ━\n"
         f"  활성 포지션 합계 마진 ≤ {cfg.MAX_TOTAL_MARGIN*100:.0f}%\n"
         f"━ MR — 5x / BB 중간선 TP / 마진 50%\n"
