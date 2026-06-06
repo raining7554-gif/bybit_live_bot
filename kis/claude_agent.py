@@ -59,9 +59,10 @@ def _get_client():
 
 
 def _enabled() -> bool:
+    # v6.65: default false (비용 통제). 수동 명령은 그대로 동작.
     return (
         bool(os.environ.get("ANTHROPIC_API_KEY"))
-        and os.environ.get("CLAUDE_AGENT_ENABLED", "true").lower() == "true"
+        and os.environ.get("CLAUDE_AGENT_ENABLED", "false").lower() == "true"
     )
 
 
