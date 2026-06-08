@@ -22,9 +22,8 @@ on:
       pit:
         description: "생존편향-free S&P500 point-in-time 유니버스 (true/false)"
         default: "false"
-  schedule:
-    # 매주 월요일 00:30 UTC = 09:30 KST (main 머지 후 활성)
-    - cron: "30 0 * * 1"
+  # 주간 자동실행 중단(2026-06-08): Clenow 종목선택은 폐기됨(EW에 열위). 멀티에셋
+  # weekly_signal.yml 이 실전 신호 담당. 이 백테스트는 수동 실행시에만 돈다.
 
 permissions:
   contents: write
