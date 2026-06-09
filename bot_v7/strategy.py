@@ -167,6 +167,13 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
     if cfg.TIER_CAP_ENABLED and tier in ("mid", "high"):
         tier = "base"
         lev = cfg.LEV_TIER_BASE
+    # v6.66: PROBE_TIER_CAP — 한 단계 더 보수. base 도 probe 로 강등.
+    # 30일 데이터: base/mid/high 모두 음수, probe/micro 만 양수.
+    if cfg.PROBE_TIER_CAP and tier in ("base", "mid", "high"):
+        tier = "probe"
+        lev = cfg.LEV_TIER_PROBE
+    # MAX_LEVERAGE_CAP 다시 적용 (env 가 더 엄격하면)
+    lev = min(lev, cfg.MAX_LEVERAGE_CAP)
     tp_margin = _tp_margin_for_tier(tier)
 
     return {
@@ -204,6 +211,9 @@ def evaluate_swing_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
       - inverse 절대 적용 안 됨
     """
     if not cfg.SWING_MODE_ENABLED:
+        return None
+    # v6.66: PROBE_TIER_CAP 활성 = 보수 모드. swing (15x) 도 차단.
+    if cfg.PROBE_TIER_CAP:
         return None
     if len(df_15m) < 60 or len(df_1h) < 60 or len(df_4h) < 60:
         return None

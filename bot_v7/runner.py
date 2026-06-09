@@ -1296,33 +1296,36 @@ def main():
     n = len(cfg.SYMBOLS)
     sym_label = ", ".join(_short(s) for s in cfg.SYMBOLS)
     regime_str = "ON" if cfg.REGIME_GATED_STRATEGY else "OFF"
-    swing_str = "ON" if cfg.SWING_MODE_ENABLED else "OFF"
+    swing_str = ("OFF (PROBE_TIER_CAP)" if cfg.PROBE_TIER_CAP
+                 else ("ON" if cfg.SWING_MODE_ENABLED else "OFF"))
     dinv_str = ("OFF" if cfg.D_INVERSE_THRESHOLD >= 100
                 else f"ranging+score≥{cfg.D_INVERSE_RANGING_MIN:.0f}")
+    cap_str = ("PROBE (5x max — 데이터 기반 생존 모드)" if cfg.PROBE_TIER_CAP
+               else ("BASE (mid/high → base)" if cfg.TIER_CAP_ENABLED else "OFF"))
     tg.send(
-        f"🚀 v6.63 시작 — Regime-Gated 다전략 풀 ({n}종, mode={cfg.STRATEGY_MODE})\n"
+        f"🚀 v6.66 시작 — 데이터 기반 생존 모드 ({n}종, mode={cfg.STRATEGY_MODE})\n"
         f"봇: {bot_label}\n"
         f"심볼: {sym_label} | 잔고: ${eq0:,.2f}\n"
-        f"━ 전략 라우터 (v6.63 신규) ━\n"
+        f"━ v6.66 생존 모드 핵심 ━\n"
+        f"  Tier 캡: {cap_str}\n"
+        f"  레버리지 상한: {cfg.MAX_LEVERAGE_CAP:.0f}x\n"
+        f"  블랙리스트: {os.environ.get('SYMBOL_BLACKLIST', 'SOLUSDT,BTCUSDT')}\n"
+        f"  Min R:R 필터: {cfg.MIN_RR_FILTER:.1f} (수수료 차감 후)\n"
+        f"━ 전략 라우터 ━\n"
         f"  trending → D + 🌊SWING (no MR)\n"
         f"  ranging  → MR (no D)\n"
         f"  mixed    → 둘 다, micro 사이즈\n"
         f"  레짐 게이트: {regime_str} (확신 ≥{cfg.REGIME_GATE_MIN_CONF})\n"
-        f"  스윙 모드: {swing_str} (ADX4H≥{cfg.SWING_ADX_4H_MIN:.0f}, "
-        f"trail {cfg.SWING_TRAIL_ATR_MULT:.1f}×ATR)\n"
+        f"  스윙 모드: {swing_str}\n"
         f"  D_INV: {dinv_str}\n"
-        f"━ D 전략 점수 tier (v6.64: R:R 보정) ━\n"
-        f"  55-59 → 3x / TP +{cfg.TP_MARGIN_MICRO*100:.0f}%   "
-        f"60-69 → 5x / TP +{cfg.TP_MARGIN_PROBE*100:.0f}%\n"
-        f"  70-79 → 10x / TP +{cfg.TP_MARGIN_BASE*100:.0f}%  "
-        f"80-89 → 15x (캡: base)\n"
-        f"  90+  → 20x (캡: base)  레버리지 상한 {cfg.MAX_LEVERAGE_CAP:.0f}x\n"
-        f"  mid TP1 +{cfg.TP1_MARGIN_MID*100:.0f}% × {cfg.TP1_RATIO_MID*100:.0f}% / "
-        f"high TP1 +{cfg.TP1_MARGIN_HIGH*100:.0f}% × {cfg.TP1_RATIO_HIGH*100:.0f}%\n"
+        f"━ Tier 매핑 (캡 적용 전 원본) ━\n"
+        f"  55-59 → 3x / TP +{cfg.TP_MARGIN_MICRO*100:.0f}%\n"
+        f"  60-69 → 5x / TP +{cfg.TP_MARGIN_PROBE*100:.0f}%\n"
+        f"  70+  → probe 강등 ({cfg.MAX_LEVERAGE_CAP:.0f}x 캡)\n"
         f"━ 글로벌 캡 ━\n"
         f"  활성 포지션 합계 마진 ≤ {cfg.MAX_TOTAL_MARGIN*100:.0f}%\n"
         f"━ MR — 5x / BB 중간선 TP / 마진 50%\n"
-        f"━ AI Gemini 쓰로틀 (v6.63) ━\n"
+        f"━ AI Gemini 쓰로틀 ━\n"
         f"  gate min={cfg.AI_FINAL_GATE_MIN_TIER} × {cfg.AI_FINAL_GATE_THROTTLE_SEC}s\n"
         f"  pattern min={cfg.AI_PATTERN_MIN_TIER} × {cfg.AI_PATTERN_THROTTLE_SEC}s\n"
         f"━ 안전 ━\n"

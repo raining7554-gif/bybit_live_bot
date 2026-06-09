@@ -25,10 +25,11 @@ def _parse_symbols() -> list[str]:
 
 SYMBOLS    = _parse_symbols()
 # v6.49 A: SOL universe 제외 (30일 -$138 단독 손실원)
+# v6.66: BTC 도 30일 -$81 손실원 추가 (ETH/XRP/BNB 만 흑자 +$135)
 # env SYMBOL_BLACKLIST 로 차단 종목 콤마 구분 지정
 _blacklist = set(
     s.strip().upper()
-    for s in os.environ.get("SYMBOL_BLACKLIST", "SOLUSDT").split(",")
+    for s in os.environ.get("SYMBOL_BLACKLIST", "SOLUSDT,BTCUSDT").split(",")
     if s.strip()
 )
 SYMBOLS    = [s for s in SYMBOLS if s not in _blacklist]
@@ -103,10 +104,18 @@ LEV_TIER_BASE     = 10.0
 LEV_TIER_MID      = 15.0
 LEV_TIER_HIGH     = 20.0
 
-# v6.63: 최대 레버리지 하드 캡 (env 로 조정)
-# 학술 권고 (Quarter-Kelly): BTC 60% 연변동 가정 시 5x 부근이 합리적.
-# 사용자 기존 운영 호환 위해 default 20 유지. 보수 운영시 5~10 권장.
-MAX_LEVERAGE_CAP  = float(os.environ.get("MAX_LEVERAGE_CAP", "20.0"))
+# v6.63 → v6.66: 최대 레버리지 하드 캡
+# 30일 데이터: base 10x 이상은 모두 손실 (-$192 총합)
+# probe 5x + micro 3x 만 흑자 (+$104)
+# 학술 권고 (Quarter-Kelly): BTC 60% 연변동 가정 시 5x 부근 합리적.
+# v6.66: default 20 → 5 (데이터 + 학술 둘 다 5x 지지)
+MAX_LEVERAGE_CAP  = float(os.environ.get("MAX_LEVERAGE_CAP", "5.0"))
+
+# v6.66: 모든 신호를 probe (5x) 이하로 강제. base/mid/high → probe 사이즈.
+# 데이터: base -$0.59/거래, mid -$8.94, high -$17.61 vs probe +$0.30, micro +$0.31
+# 점수가 결과 예측 못함 (승리 63.1 vs 패배 64.1) → 큰 사이즈 의미 없음
+# TIER_CAP_ENABLED (mid/high → base) 보다 한 단계 더 보수적
+PROBE_TIER_CAP    = os.environ.get("PROBE_TIER_CAP", "true").lower() == "true"
 
 # v6.64: 최소 R:R 필터 (수수료 차감 후)
 # 승률 좋은데 마이너스 = R:R 비대칭. 수수료 차감 net_TP/net_SL 비율이
