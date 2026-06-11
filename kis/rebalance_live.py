@@ -57,6 +57,10 @@ EXECUTE = os.environ.get("REBALANCE_EXECUTE", "false").lower() == "true"
 # 점진(분할) 리밸런스: 매 실행마다 목표와의 격차 중 이 비율만 이동.
 # 주1회 실행시 0.25 = ~4주 분할. 백테스트상 즉시보다 Sharpe↑·낙폭↓·회전율↓.
 RAMP = float(os.environ.get("REBALANCE_RAMP", "0.25"))
+# 매도(축소) 전용 속도. 백테스트(2010~, 위성): 분할매도가 즉시매도보다 Sharpe·CAGR
+# 우위(0.76/39.7% vs 0.71/31.5%) — 200MA 이탈 다수가 회복되는 휩쏘라 즉시청산은
+# 바닥매도가 됨. 기본은 매수와 동일(0.25). 낙폭 최우선이면 1.0(즉시, MDD -69→-60).
+RAMP_SELL = float(os.environ.get("REBALANCE_RAMP_SELL", str(RAMP)))
 
 
 def _fmt(plan, total_usd, paper):
@@ -86,7 +90,8 @@ def main():
     for t, w in sorted(tgt.items(), key=lambda x: -x[1]):
         tgt_usd = w * total_usd
         cur_usd = float((holdings.get(t) or {}).get("eval_usd", 0.0))
-        step = RAMP * (tgt_usd - cur_usd)        # 이번 회차 이동분(분할)
+        gap = tgt_usd - cur_usd
+        step = (RAMP if gap >= 0 else RAMP_SELL) * gap   # 이번 회차 이동분(매수/매도 속도 분리)
         plan.append((t, w, tgt_usd, cur_usd, step))
 
     msg = _fmt(plan, total_usd, paper)
