@@ -37,6 +37,10 @@ from config import (
 
 KST = pytz.timezone("Asia/Seoul")
 
+# v6.67: 사용자 종료 모드 — /sell_all 또는 /halt 후 신규 진입 금지
+# 모듈 글로벌 — 텔레그램 핸들러와 메인 루프가 함께 참조
+_KIS_HALTED = False
+
 
 def now_kst():
     return datetime.now(KST)
@@ -770,6 +774,7 @@ def main():
         f"해외 진입창: {OS_SCAN_TIME_START}~{OS_SCAN_TIME_END} KST\n"
         f"현재 {hhmm()} KST\n"
         f"{ai_label} | 명령: /review /lessons /propose /symbols /diagnose /news /scan_us\n"
+        f"긴급: /sell_all (전체 매도+halt) /halt /resume\n"
         f"⏰ 운영시간 정각마다 현황 리포트"
         + (f"\n\n{health_report}" if health_report else "")
     )
@@ -1491,6 +1496,93 @@ def main():
         "/equity": cmd_equity,
     }
 
+    # v6.67: 비상 종료 — /sell_all, /halt, /resume
+    def cmd_sell_all():
+        """모든 보유 종목 즉시 시장가 매도 + 봇 halt."""
+        global _KIS_HALTED
+        _KIS_HALTED = True
+        telegram.send_force(
+            "🛑 <b>전체 매도 시작</b>\n"
+            f"국내 {len(dom_pos)}종 + 해외 {len(os_pos)}종\n"
+            "(매도 후 신규 진입 자동 차단)"
+        )
+        sold_kr, fail_kr = 0, []
+        # 국내 매도
+        for ticker in list(dom_pos.keys()):
+            p = dom_pos.get(ticker)
+            if not p:
+                continue
+            try:
+                ok = trader.sell_market(
+                    ticker, p.get("name", ticker),
+                    int(p.get("qty", 0)),
+                    int(p.get("buy_price", 0)),
+                    reason="사용자_종료_매도",
+                )
+                if ok:
+                    dom_pos.pop(ticker, None)
+                    sold_kr += 1
+                else:
+                    fail_kr.append(p.get("name", ticker))
+            except Exception as e:
+                print(f"[SELL_ALL] KR {ticker} EXC: {e}", flush=True)
+                fail_kr.append(p.get("name", ticker))
+        # 해외 매도
+        sold_us, fail_us = 0, []
+        for ticker in list(os_pos.keys()):
+            p = os_pos.get(ticker)
+            if not p:
+                continue
+            try:
+                ok = trader_overseas.sell_overseas(
+                    ticker, p.get("name", ticker),
+                    p.get("exchange", "NAS"),
+                    p.get("qty", 0),
+                    float(p.get("buy_price", 0)),
+                    reason="사용자_종료_매도",
+                )
+                if ok:
+                    os_pos.pop(ticker, None)
+                    sold_us += 1
+                else:
+                    fail_us.append(p.get("name", ticker))
+            except Exception as e:
+                print(f"[SELL_ALL] US {ticker} EXC: {e}", flush=True)
+                fail_us.append(p.get("name", ticker))
+        # 결과 보고
+        lines = ["✅ <b>전체 매도 결과</b>",
+                 f"국내: {sold_kr}건 완료" + (f" / 실패 {len(fail_kr)}: {', '.join(fail_kr)}" if fail_kr else ""),
+                 f"해외: {sold_us}건 완료" + (f" / 실패 {len(fail_us)}: {', '.join(fail_us)}" if fail_us else "")]
+        if fail_kr or fail_us:
+            lines.append("⚠️ 실패 종목은 KIS 앱에서 직접 매도 필요 (장 외 시간 가능성)")
+        lines.append("")
+        lines.append("🛑 봇 halt 상태 — 신규 진입 차단됨")
+        lines.append("완전 종료하려면 Railway 에서 KIS 서비스 stop")
+        telegram.send_force("\n".join(lines))
+
+    def cmd_halt():
+        """신규 진입만 차단 (보유 종목은 유지, 정상 모니터링)."""
+        global _KIS_HALTED
+        if _KIS_HALTED:
+            telegram.send("⚠️ 이미 halt 상태")
+            return
+        _KIS_HALTED = True
+        telegram.send_force(
+            "🛑 <b>KIS 봇 halt</b>\n"
+            "신규 진입 차단됨 (보유 종목 정상 모니터링)\n"
+            f"국내 {len(dom_pos)}종 / 해외 {len(os_pos)}종 보유 중\n"
+            "해제: /resume / 전체 매도: /sell_all"
+        )
+
+    def cmd_resume():
+        global _KIS_HALTED
+        _KIS_HALTED = False
+        telegram.send_force("✅ KIS 봇 halt 해제 (신규 진입 가능)")
+
+    cmd_handlers["/sell_all"] = cmd_sell_all
+    cmd_handlers["/halt"] = cmd_halt
+    cmd_handlers["/resume"] = cmd_resume
+
     # v6.52: KIS Multi-agent — Bybit 와 동일 패턴
     try:
         import claude_agent as kis_agent
@@ -1692,6 +1784,7 @@ def main():
                 max_pos = DOM_MAX_POSITIONS
             if (is_dom_scan_time() and not circuit_tripped
                     and not total_circuit_tripped
+                    and not _KIS_HALTED
                     and len(dom_pos) < max_pos):
                 if elapsed(last_dom_scan) >= SCAN_INTERVAL_SEC:
                     try:
@@ -1855,6 +1948,7 @@ def main():
                     )
                     last_os_scan = now  # 스캔 카운트만 갱신, 실제 스캔 X
                 elif (is_os_scan_time() and not total_circuit_tripped
+                        and not _KIS_HALTED
                         and len(os_pos) < OS_MAX_POSITIONS
                         and elapsed(last_os_scan) >= SCAN_INTERVAL_SEC):
                         # v6.11: 스캔 시작 알림 (1시간 dedup)
@@ -1998,6 +2092,7 @@ def main():
         if (9 <= now.hour <= 14 and 10 <= now.minute < 20
                 and now.hour != last_rotation_check_kst_hour
                 and is_trading_day(now)
+                and not _KIS_HALTED
                 and DOM_STRATEGY_MODE == "clenow"
                 and dom_pos):
             try:
