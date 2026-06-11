@@ -61,6 +61,8 @@ RAMP = float(os.environ.get("REBALANCE_RAMP", "0.25"))
 # 우위(0.76/39.7% vs 0.71/31.5%) — 200MA 이탈 다수가 회복되는 휩쏘라 즉시청산은
 # 바닥매도가 됨. 기본은 매수와 동일(0.25). 낙폭 최우선이면 1.0(즉시, MDD -69→-60).
 RAMP_SELL = float(os.environ.get("REBALANCE_RAMP_SELL", str(RAMP)))
+# 전환 청산: 목표에 없는 기존 미국 보유종목을 전량 매도(현금화). 기본 off(안전).
+LIQUIDATE = os.environ.get("LIQUIDATE", "false").lower() == "true"
 
 
 def _fmt(plan, total_usd, paper):
@@ -94,16 +96,43 @@ def main():
         step = (RAMP if gap >= 0 else RAMP_SELL) * gap   # 이번 회차 이동분(매수/매도 속도 분리)
         plan.append((t, w, tgt_usd, cur_usd, step))
 
+    # ---- 전환: 목표에 없는 기존 미국 보유종목 청산(LIQUIDATE=true) ----
+    sells = []
+    if LIQUIDATE:
+        try:
+            from kis.main import load_us_holdings
+            us = load_us_holdings() or {}
+        except Exception as e:  # noqa: BLE001
+            us = {}
+            print(f"[청산] 보유조회 실패: {e}")
+        for tk, pos in us.items():
+            if tk in tgt or tk in SKIP:
+                continue                       # 목표 종목은 유지(리밸런스가 처리)
+            sells.append(pos)
+
     msg = _fmt(plan, total_usd, paper)
+    if sells:
+        msg += "\n\n🧹 기존종목 청산(목표 외):\n" + "\n".join(
+            f"  {p['ticker']:5} {p['qty']:g}주 전량매도" for p in sells)
     print(msg)
     quant_telegram(msg)          # 전용 퀀트봇으로 (기존 kis 봇과 분리)
 
     if not EXECUTE:
         print("\n[dry-run] REBALANCE_EXECUTE=true 로 실행하면 실제 주문합니다. "
-              "처음엔 KIS_PAPER=true 모의로 시작하세요.")
+              "처음엔 KIS_PAPER=true 모의로 시작하세요. "
+              "기존종목 청산은 LIQUIDATE=true 필요.")
         return
 
-    # ---- EXECUTE: 이번 회차 분할분만큼 매수 (진입/추가). 매도 리밸런스는 다음 단계 ----
+    # ---- EXECUTE 1) 기존종목 청산 (전량 매도) ----
+    for p in sells:
+        try:
+            ot.sell_overseas(p["ticker"], p.get("name", p["ticker"]),
+                             p.get("exchange", "NAS"), p["qty"],
+                             p.get("buy_price", 0.0), reason="멀티에셋 전환 청산")
+        except Exception as e:  # noqa: BLE001
+            print(f"[청산] {p['ticker']} 실패: {e}")
+
+    # ---- EXECUTE 2) 이번 회차 분할분만큼 매수 (진입/추가) ----
     for t, w, tgt_usd, cur_usd, step in plan:
         if step <= 5.0:                       # 매수분 미미하면 스킵
             continue
