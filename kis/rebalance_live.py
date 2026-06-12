@@ -139,13 +139,16 @@ def main():
         return
 
     # ---- EXECUTE 1) 기존종목 청산 (전량 매도) ----
+    done = []
     for p in sells:
         try:
             ot.sell_overseas(p["ticker"], p.get("name", p["ticker"]),
                              p.get("exchange", "NAS"), p["qty"],
                              p.get("buy_price", 0.0), reason="멀티에셋 전환 청산")
+            done.append(f"매도 {p['ticker']} {p['qty']:g}주")
         except Exception as e:  # noqa: BLE001
             print(f"[청산] {p['ticker']} 실패: {e}")
+            done.append(f"❌매도실패 {p['ticker']}")
 
     # ---- EXECUTE 2) 이번 회차 분할분만큼 매수 (진입/추가) ----
     for t, w, tgt_usd, cur_usd, step in plan:
@@ -153,10 +156,18 @@ def main():
             continue
         exch = EXCHANGE.get(t, "NAS")
         try:
-            ot.buy_overseas(t, t, exch, reason="멀티에셋 점진 리밸런스",
-                            full_allocation_usd=step)
+            res = ot.buy_overseas(t, t, exch, reason="멀티에셋 점진 리밸런스",
+                                  full_allocation_usd=step)
+            done.append(f"매수 {t} ${step:,.0f}" + ("" if res else " (미체결/거부)"))
         except Exception as e:  # noqa: BLE001
             print(f"[order] {t} 실패: {e}")
+            done.append(f"❌매수실패 {t}")
+
+    # ---- 체결 요약을 퀀트봇으로 ----
+    if done:
+        quant_telegram("✅ 멀티에셋 주문 실행\n" + "\n".join("  " + d for d in done))
+    else:
+        quant_telegram("ℹ️ 멀티에셋: 이번 회차 주문 없음(목표 도달/금액 미미)")
 
 
 if __name__ == "__main__":
