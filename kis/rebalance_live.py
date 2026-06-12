@@ -97,6 +97,12 @@ def main():
     total_usd = bal.get("total_eval_usd") or bal.get("available_usd") or 0.0
     holdings = bal.get("holdings", {}) or {}     # {ticker: {qty, eval_usd}} if available
 
+    # 예산 상한: REBALANCE_BUDGET_USD>0 면 그 금액만 멀티에셋에 배분(소액 실전 테스트
+    # 또는 계좌 일부만 운용). 0이면 계좌 전체.
+    budget = float(os.environ.get("REBALANCE_BUDGET_USD", "0"))
+    if budget > 0:
+        total_usd = min(total_usd, budget)
+
     plan = []
     for t, w in sorted(tgt.items(), key=lambda x: -x[1]):
         tgt_usd = w * total_usd
