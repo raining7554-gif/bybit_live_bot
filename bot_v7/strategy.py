@@ -160,6 +160,11 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
         return None
 
     tier = tier_for_score(score)
+    # v6.68: PROBE_ONLY_ENTRIES — base/mid/high 신호 자체 skip (사용자 채택).
+    # 데이터: base avg -$0.91, mid -$9.74 → 사이즈만 줄여도 음수. 아예 차단.
+    # probe/micro 만 거래.
+    if cfg.PROBE_ONLY_ENTRIES and tier in ("base", "mid", "high"):
+        return None
     # v6.54: mid/high tier 캡 — 점수 80+ 도 base 사이즈로 제한
     # 데이터: mid 10건 -$98 / high 6건 -$74 (16건 -$172, 점수-승률 무상관)
     # 큰 사이즈 손실 차단. 진입 신호는 유지하되 base (10x/50%) 사이즈.
@@ -214,6 +219,9 @@ def evaluate_swing_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
         return None
     # v6.66: PROBE_TIER_CAP 활성 = 보수 모드. swing (15x) 도 차단.
     if cfg.PROBE_TIER_CAP:
+        return None
+    # v6.68: PROBE_ONLY_ENTRIES 활성 = base+ 차단. swing 도 당연히 차단.
+    if cfg.PROBE_ONLY_ENTRIES:
         return None
     if len(df_15m) < 60 or len(df_1h) < 60 or len(df_4h) < 60:
         return None
