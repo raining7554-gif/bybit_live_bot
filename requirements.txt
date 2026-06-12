@@ -4,3 +4,4 @@ numpy==1.26.4
 requests
 anthropic>=0.40.0
 matplotlib>=3.7
+pytz
