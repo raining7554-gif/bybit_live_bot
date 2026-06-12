@@ -117,6 +117,12 @@ MAX_LEVERAGE_CAP  = float(os.environ.get("MAX_LEVERAGE_CAP", "5.0"))
 # TIER_CAP_ENABLED (mid/high → base) 보다 한 단계 더 보수적
 PROBE_TIER_CAP    = os.environ.get("PROBE_TIER_CAP", "true").lower() == "true"
 
+# v6.68: PROBE_TIER_CAP 보다 한 단계 더 보수.
+# base/mid/high tier 신호를 진입 자체 skip (사이즈 강등 X, 거래 X).
+# 데이터: base avg -$0.91, mid -$9.74 → 사이즈만 줄여서 안 되고 아예 차단.
+# probe/micro 만 거래. 거래량 ~30% 감소하지만 손실원 완전 차단.
+PROBE_ONLY_ENTRIES = os.environ.get("PROBE_ONLY_ENTRIES", "true").lower() == "true"
+
 # v6.64: 최소 R:R 필터 (수수료 차감 후)
 # 승률 좋은데 마이너스 = R:R 비대칭. 수수료 차감 net_TP/net_SL 비율이
 # MIN_RR_FILTER 미만이면 진입 차단. 1.3 = 보수적, 1.5 = 적극적 필터.

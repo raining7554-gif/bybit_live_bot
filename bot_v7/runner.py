@@ -1300,8 +1300,14 @@ def main():
                  else ("ON" if cfg.SWING_MODE_ENABLED else "OFF"))
     dinv_str = ("OFF" if cfg.D_INVERSE_THRESHOLD >= 100
                 else f"ranging+score≥{cfg.D_INVERSE_RANGING_MIN:.0f}")
-    cap_str = ("PROBE (5x max — 데이터 기반 생존 모드)" if cfg.PROBE_TIER_CAP
-               else ("BASE (mid/high → base)" if cfg.TIER_CAP_ENABLED else "OFF"))
+    if cfg.PROBE_ONLY_ENTRIES:
+        cap_str = "PROBE-ONLY (base+ 진입 차단)"
+    elif cfg.PROBE_TIER_CAP:
+        cap_str = "PROBE (5x max — 데이터 기반 생존 모드)"
+    elif cfg.TIER_CAP_ENABLED:
+        cap_str = "BASE (mid/high → base)"
+    else:
+        cap_str = "OFF"
     tg.send(
         f"🚀 v6.66 시작 — 데이터 기반 생존 모드 ({n}종, mode={cfg.STRATEGY_MODE})\n"
         f"봇: {bot_label}\n"
