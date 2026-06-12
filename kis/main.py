@@ -714,10 +714,10 @@ def get_total_equity_krw() -> int:
 # 메인
 # ═══════════════════════════════════════════════════════
 def main():
-    # 킬 스위치: 멀티에셋(rebalance_live)으로 전환 시 이 봇이 같은 계좌를 건드려
-    # 충돌하지 않도록 중단. KIS_BOT_ENABLED=false 면 즉시 종료(매매 안 함).
-    if os.environ.get("KIS_BOT_ENABLED", "true").lower() == "false":
-        print("⛔ KIS_BOT_ENABLED=false — 이 봇 비활성화(멀티에셋 전환). 종료합니다.")
+    # 이 옛 봇은 멀티에셋(rebalance_live)으로 은퇴 — 기본 비활성화. 재배포돼도
+    # 명시적으로 KIS_BOT_ENABLED=true 로 켜지 않는 한 즉시 종료(매매 안 함).
+    if os.environ.get("KIS_BOT_ENABLED", "false").lower() != "true":
+        print("⛔ KIS 옛 봇 비활성화(멀티에셋 전환). 다시 쓰려면 KIS_BOT_ENABLED=true. 종료합니다.")
         return
     print("=" * 55)
     print("🚀 KIS 자동매매 봇 v3.2")
