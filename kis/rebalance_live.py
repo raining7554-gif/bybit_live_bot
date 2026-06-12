@@ -18,7 +18,16 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.request
+
+# 경로 자가설정: repo root(backtest_us용) + kis/(config·trader_overseas 등 bare import용).
+# 레일웨이/로컬 어디서 실행하든 import가 깨지지 않게 한다.
+_HERE = os.path.dirname(os.path.abspath(__file__))      # .../kis
+_ROOT = os.path.dirname(_HERE)                          # repo root
+for _p in (_ROOT, _HERE):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from backtest_us.strategy_live import compute, SEC3X
 
@@ -78,7 +87,7 @@ def _fmt(plan, total_usd, paper):
 
 
 def main():
-    from kis import trader_overseas as ot
+    import trader_overseas as ot
     paper = os.environ.get("KIS_PAPER", "false").lower() == "true"
 
     _, tgt, asof = compute()
@@ -100,7 +109,7 @@ def main():
     sells = []
     if LIQUIDATE:
         try:
-            from kis.main import load_us_holdings
+            from main import load_us_holdings
             us = load_us_holdings() or {}
         except Exception as e:  # noqa: BLE001
             us = {}
