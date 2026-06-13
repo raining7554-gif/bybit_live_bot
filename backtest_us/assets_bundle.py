@@ -42,7 +42,20 @@ SECTORS = [
     "TAN", "ICLN",                       # solar / clean energy
 ]
 
-ASSETS = MACRO + SECTORS                  # full fetch list (one bundle)
+# EXTRA candidate assets — to TEST whether they add genuine new risk exposure to
+# the core (inflation / credit / cash / size / region / factor). Verified via
+# backtest before any adoption; many may not help (see ROADMAP [4a] — broadening
+# the universe rarely improves risk-adjusted returns).
+EXTRA = [
+    "TIP", "LQD", "BIL", "EMB",          # inflation-linked / IG credit / T-bills(cash) / EM bonds
+    "USO",                               # crude oil (inflation/geopolitics)
+    "IWM",                               # US small caps
+    "EWJ", "INDA",                       # Japan / India
+    "MTUM", "USMV", "QUAL",              # factor: momentum / low-vol / quality
+]
+
+
+ASSETS = MACRO + SECTORS + EXTRA          # full fetch list (one bundle)
 
 
 
