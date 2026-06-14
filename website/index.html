@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>디테일랩 · 매출을 만드는 상세페이지 디자인</title>
+  <meta name="description" content="전환율을 높이는 상세페이지 디자인 전문 스튜디오. 기획부터 디자인, 납품까지 한 번에." />
+
+  <!-- Pretendard 한글 폰트 -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link
+    rel="stylesheet"
+    as="style"
+    crossorigin
+    href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+  />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- 진행 바 -->
+  <div class="scroll-progress" id="scrollProgress"></div>
+
+  <!-- 네비게이션 -->
+  <header class="nav" id="nav">
+    <div class="nav__inner">
+      <a href="#hero" class="nav__logo" data-scroll>
+        <span class="nav__logo-mark"></span>
+        DETAI<span>LAB</span>
+      </a>
+      <nav class="nav__menu">
+        <a href="#portfolio" data-scroll>포트폴리오</a>
+        <a href="#services" data-scroll>서비스</a>
+        <a href="#pricing" data-scroll>가격</a>
+        <a href="#process" data-scroll>제작과정</a>
+      </nav>
+      <a href="#contact" class="btn btn--small" data-scroll>견적 문의</a>
+      <button class="nav__toggle" id="navToggle" aria-label="메뉴 열기">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 히어로 -->
+  <section class="hero" id="hero">
+    <div class="hero__bg">
+      <div class="blob blob--1"></div>
+      <div class="blob blob--2"></div>
+      <div class="blob blob--3"></div>
+      <div class="grid-overlay"></div>
+    </div>
+
+    <div class="hero__content">
+      <p class="hero__eyebrow reveal">상세페이지 디자인 스튜디오</p>
+      <h1 class="hero__title">
+        <span class="line"><span>스크롤이 멈추는</span></span>
+        <span class="line"><span>상세페이지를 <em>디자인</em>합니다</span></span>
+      </h1>
+      <p class="hero__desc reveal" data-delay="200">
+        그냥 예쁜 페이지가 아니라, <b>구매 버튼을 누르게 만드는</b> 상세페이지.<br />
+        기획 · 카피 · 디자인 · 코딩까지 한 팀에서 완성합니다.
+      </p>
+      <div class="hero__actions reveal" data-delay="350">
+        <a href="#portfolio" class="btn btn--primary" data-scroll>포트폴리오 보기</a>
+        <a href="#contact" class="btn btn--ghost" data-scroll>무료 견적받기 →</a>
+      </div>
+
+      <ul class="hero__stats reveal" data-delay="500">
+        <li><strong data-count="1200" data-suffix="+">0</strong><span>완성된 상세페이지</span></li>
+        <li><strong data-count="187" data-suffix="%">0</strong><span>평균 전환율 상승</span></li>
+        <li><strong data-count="98" data-suffix="%">0</strong><span>재의뢰 만족도</span></li>
+      </ul>
+    </div>
+
+    <!-- 떠다니는 목업 -->
+    <div class="hero__mockups" id="heroMockups">
+      <div class="mock mock--1" data-depth="0.05"></div>
+      <div class="mock mock--2" data-depth="0.12"></div>
+      <div class="mock mock--3" data-depth="0.08"></div>
+    </div>
+
+    <a href="#clients" class="hero__scroll" data-scroll aria-label="아래로 스크롤">
+      <span></span>SCROLL
+    </a>
+  </section>
+
+  <!-- 클라이언트 마키 -->
+  <section class="clients" id="clients">
+    <p class="clients__label">매출 1위 셀러부터 글로벌 브랜드까지, 함께했습니다</p>
+    <div class="marquee">
+      <div class="marquee__track">
+        <span>NOVA COSMETICS</span><span>·</span><span>FITLAB</span><span>·</span>
+        <span>그린마켓</span><span>·</span><span>SEOUL DENIM</span><span>·</span>
+        <span>달콤상회</span><span>·</span><span>PETMORE</span><span>·</span>
+        <span>홈쿡스튜디오</span><span>·</span><span>AURA BEAUTY</span><span>·</span>
+        <span>NOVA COSMETICS</span><span>·</span><span>FITLAB</span><span>·</span>
+        <span>그린마켓</span><span>·</span><span>SEOUL DENIM</span><span>·</span>
+        <span>달콤상회</span><span>·</span><span>PETMORE</span><span>·</span>
+        <span>홈쿡스튜디오</span><span>·</span><span>AURA BEAUTY</span><span>·</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 포트폴리오 -->
+  <section class="section portfolio" id="portfolio">
+    <div class="container">
+      <div class="section__head reveal">
+        <span class="tag">PORTFOLIO</span>
+        <h2 class="section__title">결과로 증명한 작업들</h2>
+        <p class="section__sub">카테고리를 골라 실제 작업 사례를 확인하세요.</p>
+      </div>
+
+      <div class="filters reveal" data-delay="100">
+        <button class="filter is-active" data-filter="all">전체</button>
+        <button class="filter" data-filter="beauty">뷰티</button>
+        <button class="filter" data-filter="food">푸드</button>
+        <button class="filter" data-filter="fashion">패션</button>
+        <button class="filter" data-filter="living">리빙</button>
+      </div>
+
+      <div class="port-grid" id="portGrid">
+        <article class="card reveal" data-cat="beauty" style="--accent:#ff6b9d">
+          <div class="card__thumb"><span class="card__badge">전환율 +212%</span></div>
+          <div class="card__body">
+            <h3>NOVA 비타민 세럼</h3>
+            <p>성분 신뢰도를 끌어올린 스토리텔링형 상세페이지</p>
+          </div>
+        </article>
+        <article class="card reveal" data-cat="food" data-delay="60" style="--accent:#ffa94d">
+          <div class="card__thumb"><span class="card__badge">월 매출 3배</span></div>
+          <div class="card__body">
+            <h3>달콤상회 수제청</h3>
+            <p>먹음직스러운 비주얼 중심의 감성 레이아웃</p>
+          </div>
+        </article>
+        <article class="card reveal" data-cat="fashion" data-delay="120" style="--accent:#5c7cfa">
+          <div class="card__thumb"><span class="card__badge">체류시간 2.4배</span></div>
+          <div class="card__body">
+            <h3>SEOUL DENIM</h3>
+            <p>핏과 디테일을 강조한 매거진형 룩북</p>
+          </div>
+        </article>
+        <article class="card reveal" data-cat="living" style="--accent:#20c997">
+          <div class="card__thumb"><span class="card__badge">리뷰 4.9★</span></div>
+          <div class="card__body">
+            <h3>홈쿡 무쇠팬</h3>
+            <p>사용 시나리오 기반의 기능 설득형 구성</p>
+          </div>
+        </article>
+        <article class="card reveal" data-cat="beauty" data-delay="60" style="--accent:#cc5de8">
+          <div class="card__thumb"><span class="card__badge">광고 ROAS 5.1</span></div>
+          <div class="card__body">
+            <h3>AURA 톤업크림</h3>
+            <p>비포애프터를 극대화한 임팩트 비주얼</p>
+          </div>
+        </article>
+        <article class="card reveal" data-cat="food" data-delay="120" style="--accent:#fa5252">
+          <div class="card__thumb"><span class="card__badge">완판 4회</span></div>
+          <div class="card__body">
+            <h3>그린마켓 샐러드</h3>
+            <p>신선함을 시각화한 클린 그리드 디자인</p>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- 서비스 -->
+  <section class="section services" id="services">
+    <div class="container">
+      <div class="section__head reveal">
+        <span class="tag">SERVICES</span>
+        <h2 class="section__title">필요한 만큼, 제대로</h2>
+        <p class="section__sub">기획부터 운영까지 단계별로 골라 의뢰할 수 있어요.</p>
+      </div>
+
+      <div class="svc-grid">
+        <article class="svc reveal">
+          <div class="svc__icon">✦</div>
+          <h3>상세페이지 디자인</h3>
+          <p>구매를 부르는 카피와 레이아웃으로 제작하는 메인 서비스</p>
+        </article>
+        <article class="svc reveal" data-delay="80">
+          <div class="svc__icon">◈</div>
+          <h3>브랜드 기획 · 카피</h3>
+          <p>고객의 구매 심리를 설계하는 메시지와 후킹 카피라이팅</p>
+        </article>
+        <article class="svc reveal" data-delay="160">
+          <div class="svc__icon">❖</div>
+          <h3>제품 촬영 · 보정</h3>
+          <p>스튜디오 촬영부터 누끼·합성까지 비주얼 전 과정</p>
+        </article>
+        <article class="svc reveal" data-delay="240">
+          <div class="svc__icon">⬡</div>
+          <h3>썸네일 · 광고 소재</h3>
+          <p>클릭률을 높이는 썸네일과 SNS 퍼포먼스 배너</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- 가격 -->
+  <section class="section pricing" id="pricing">
+    <div class="container">
+      <div class="section__head reveal">
+        <span class="tag">PRICING</span>
+        <h2 class="section__title">투명한 패키지 가격</h2>
+        <p class="section__sub">숨은 비용 없이, 필요한 구성만 선택하세요.</p>
+      </div>
+
+      <div class="price-grid">
+        <article class="price reveal">
+          <h3 class="price__name">BASIC</h3>
+          <p class="price__for">소규모 셀러 · 단일 제품</p>
+          <div class="price__amount"><span>₩</span>290,000<small>/ 1페이지</small></div>
+          <ul class="price__list">
+            <li>상세페이지 디자인 1종</li>
+            <li>기본 레이아웃 기획</li>
+            <li>제공 이미지 보정</li>
+            <li>2회 수정</li>
+          </ul>
+          <a href="#contact" class="btn btn--ghost btn--block" data-scroll>문의하기</a>
+        </article>
+
+        <article class="price price--featured reveal" data-delay="100">
+          <span class="price__ribbon">가장 인기</span>
+          <h3 class="price__name">PRO</h3>
+          <p class="price__for">성장 브랜드 · 전환 최적화</p>
+          <div class="price__amount"><span>₩</span>590,000<small>/ 1페이지</small></div>
+          <ul class="price__list">
+            <li><b>기획 + 카피라이팅 포함</b></li>
+            <li>전환 설계형 상세페이지</li>
+            <li>제품 촬영 1회 (10컷)</li>
+            <li>썸네일 2종 제공</li>
+            <li>4회 수정</li>
+          </ul>
+          <a href="#contact" class="btn btn--primary btn--block" data-scroll>견적 문의</a>
+        </article>
+
+        <article class="price reveal" data-delay="200">
+          <h3 class="price__name">BRAND</h3>
+          <p class="price__for">신규 런칭 · 풀패키지</p>
+          <div class="price__amount"><span>₩</span>1,500,000<small>/ 부터</small></div>
+          <ul class="price__list">
+            <li>브랜드 기획 컨설팅</li>
+            <li>상세페이지 + 광고 소재 세트</li>
+            <li>전문 스튜디오 촬영</li>
+            <li>무제한 협의 수정</li>
+            <li>전담 디렉터 배정</li>
+          </ul>
+          <a href="#contact" class="btn btn--ghost btn--block" data-scroll>상담 신청</a>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- 제작 과정 -->
+  <section class="section process" id="process">
+    <div class="container">
+      <div class="section__head reveal">
+        <span class="tag">PROCESS</span>
+        <h2 class="section__title">문의부터 납품까지, 평균 7일</h2>
+        <p class="section__sub">한 단계도 빠짐없이, 투명하게 진행됩니다.</p>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <div class="timeline__line"><span id="timelineFill"></span></div>
+        <div class="step reveal">
+          <div class="step__num">01</div>
+          <div class="step__body"><h3>문의 · 상담</h3><p>제품과 목표를 듣고 방향을 잡습니다. 견적은 24시간 내 회신.</p></div>
+        </div>
+        <div class="step reveal" data-delay="80">
+          <div class="step__num">02</div>
+          <div class="step__body"><h3>기획 · 구성안</h3><p>구매 흐름에 맞춘 스토리보드와 카피 초안을 설계합니다.</p></div>
+        </div>
+        <div class="step reveal" data-delay="160">
+          <div class="step__num">03</div>
+          <div class="step__body"><h3>디자인 작업</h3><p>브랜드 톤에 맞춘 비주얼로 상세페이지를 완성합니다.</p></div>
+        </div>
+        <div class="step reveal" data-delay="240">
+          <div class="step__num">04</div>
+          <div class="step__body"><h3>피드백 · 수정</h3><p>실시간 시안 공유로 빠르게 의견을 반영합니다.</p></div>
+        </div>
+        <div class="step reveal" data-delay="320">
+          <div class="step__num">05</div>
+          <div class="step__body"><h3>최종 납품</h3><p>원본 파일과 등록용 이미지를 한 번에 전달드립니다.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA / 문의 -->
+  <section class="cta" id="contact">
+    <div class="container cta__inner reveal">
+      <h2>지금, 매출이 오르는<br />상세페이지를 시작하세요</h2>
+      <p>제품 정보만 주시면 24시간 안에 맞춤 견적을 보내드립니다.</p>
+      <div class="cta__actions">
+        <a href="mailto:hello@detailab.kr" class="btn btn--primary btn--lg">이메일로 문의하기</a>
+        <a href="#" class="btn btn--ghost btn--lg">카카오톡 상담 →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- 푸터 -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">DETAI<span>LAB</span><p>매출을 만드는 상세페이지 디자인 스튜디오</p></div>
+      <div class="footer__cols">
+        <div><h4>서비스</h4><a href="#services" data-scroll>상세페이지</a><a href="#services" data-scroll>제품 촬영</a><a href="#services" data-scroll>광고 소재</a></div>
+        <div><h4>회사</h4><a href="#portfolio" data-scroll>포트폴리오</a><a href="#process" data-scroll>제작과정</a><a href="#pricing" data-scroll>가격</a></div>
+        <div><h4>문의</h4><a href="mailto:hello@detailab.kr">hello@detailab.kr</a><a href="#">02-1234-5678</a><a href="#">평일 10:00–19:00</a></div>
+      </div>
+    </div>
+    <div class="footer__bottom container">© 2026 DETAILAB. All rights reserved.</div>
+  </footer>
+
+  <script src="js/main.js"></script>
+</body>
+</html>
