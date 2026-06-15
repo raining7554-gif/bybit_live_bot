@@ -45,9 +45,11 @@ def _raise_with_body(resp, url: str) -> None:
     """KIS는 4xx/5xx에도 JSON 에러바디(rt_cd/msg_cd/msg1)를 주는 경우가 많다.
     raise_for_status()는 그 본문을 버려 '500'만 남기므로, 본문을 예외에 실어 노출."""
     if resp.status_code >= 400:
-        detail = (resp.text or "")[:300].replace("\n", " ")
+        detail = (resp.text or "").strip().replace("\n", " ")[:300]
+        # KIS 본문(msg1 등)을 맨 앞에 둔다 — 호출부가 메시지를 짧게 자를 때 URL이 아니라
+        # 사유가 살아남도록. 본문 없으면 reason 으로 폴백.
         raise requests.HTTPError(
-            f"{resp.status_code} {resp.reason} for {url} :: {detail}", response=resp)
+            f"{resp.status_code} {detail or resp.reason} <{url}>", response=resp)
 
 
 def get(path: str, tr_id: str, params: dict) -> dict:
