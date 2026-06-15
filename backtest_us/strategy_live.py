@@ -86,6 +86,38 @@ def compute():
     return total, tgt, cw.index[-1]
 
 
+def build_context(tgt: dict) -> str:
+    """이번 신호의 '시장 상황 + 왜 이 비중인지'를 사람이 읽을 텍스트로."""
+    from .assets_bundle import MACRO
+    cm = load_assets().sort_index()
+    cm = cm.reindex(cm["SPY"].dropna().index)
+    core = cm[[c for c in MACRO if c in cm.columns]]
+    R = core.pct_change()
+    last = core.iloc[-1]
+    ma200 = core.rolling(200, min_periods=100).mean().iloc[-1]
+    trend = (last > ma200) & last.notna()
+    n_on, n_tot = int(trend.sum()), int(last.notna().sum())
+    vol = (R.rolling(60, min_periods=30).std().iloc[-1] * (TD ** 0.5))
+
+    spy = cm["SPY"]; spy_ext = spy.iloc[-1] / spy.rolling(200).mean().iloc[-1] - 1
+    qqq = cm["QQQ"]; tqqq_on = qqq.iloc[-1] > qqq.rolling(200).mean().iloc[-1]
+    regime = "강세(위험선호)" if n_on >= n_tot * 0.6 else ("혼조" if n_on >= n_tot * 0.3 else "약세(방어)")
+
+    lines = ["", "📈 왜 이 비중인가",
+             f"· 시장: 위험자산 추세 {n_on}/{n_tot} ON → {regime}",
+             f"· SPY 200일선 대비 {spy_ext:+.0%} ({'과열' if spy_ext > 0.1 else '정상'})",
+             f"· 레버리지 위성: TQQQ {'ON(나스닥 상승추세)' if tqqq_on else 'OFF→현금'}",
+             "· 원리: 추세 위인 자산만 보유, 변동성 낮을수록 비중↑(위험 균등)"]
+    # 큰 비중 2~3개 이유
+    top = sorted(tgt.items(), key=lambda x: -x[1])[:3]
+    for t, w in top:
+        v = vol.get(t)
+        why = (f"저변동({v:.0%})→비중큼" if (v is not None and v == v and v < 0.15)
+               else ("레버리지 위성" if t in SEC3X.values() or t == "TQQQ" else "추세보유"))
+        lines.append(f"   {t} {w:.0%}: {why}")
+    return "\n".join(lines)
+
+
 def main():
     total, tgt, asof = compute()
     st = _curve_stats((1 + total.loc["2010-01-01":]).cumprod(), "LIVE")
