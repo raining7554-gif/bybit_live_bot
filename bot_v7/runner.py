@@ -700,15 +700,63 @@ def _reconcile_with_exchange(symbol: str, api_pos):
 
 
 def _restore_from_state():
-    """디스크에서 모든 심볼 포지션 복구."""
+    """디스크에서 모든 심볼 포지션 복구.
+
+    v6.69: 블랙리스트/SYMBOLS 에 없는 심볼은 stale 로 간주.
+    - 거래소 API 로 실제 포지션 확인 (있으면 강제 청산은 X — 사용자 알림만)
+    - 거래소에도 없으면 state 에서 제거 (정리)
+    """
     saved = st.load_all()
+    stale_cleaned = []
+    stale_alive = []
+    active = []
     for sym, pos in saved.items():
-        if pos and pos.get("side"):
+        if not (pos and pos.get("side")):
+            continue
+        if sym not in cfg.SYMBOLS:
+            # 거래소 실재 확인
+            try:
+                api_pos = ex.get_open_positions(sym)
+            except Exception:
+                api_pos = None
+            if api_pos is None:
+                # 거래소에도 없음 → stale state. 정리.
+                stale_cleaned.append(sym)
+            else:
+                # 거래소엔 살아있음 → 사용자에게 알림 (자동 청산 X)
+                stale_alive.append((sym, pos))
+            continue
+        _positions[sym] = pos
+        active.append((sym, pos))
+
+    # state 정리
+    if stale_cleaned:
+        st.save_all(_positions)
+        tg.send(
+            f"🧹 <b>stale 포지션 정리</b>\n"
+            f"state 에만 남고 거래소에 없는 포지션 {len(stale_cleaned)}건 제거:\n"
+            f"  {', '.join(_short(s) for s in stale_cleaned)}"
+        )
+
+    # 실재 stale 포지션 알림 (수동 처리 필요)
+    if stale_alive:
+        lines = ["⚠️ <b>블랙리스트 심볼 보유 중</b>"]
+        for sym, pos in stale_alive:
+            # 이런 경우 봇이 관리는 못함 — 일단 _positions 에 넣어서 status 표시는 가능하게
             _positions[sym] = pos
-            tg.send(
-                f"🔄 [{_short(sym)}] 저장된 포지션 복구: "
-                f"{pos.get('side')} entry=${pos.get('entry'):.2f}"
+            lines.append(
+                f"  • {_short(sym)} {pos.get('side')} entry=${pos.get('entry', 0):.2f}"
             )
+        lines.append("이 종목은 현재 SYMBOLS 에서 제외돼 봇이 자동 관리 안 함.")
+        lines.append("Bybit 앱에서 직접 청산하거나, SYMBOL_BLACKLIST 에서 제거하세요.")
+        tg.send("\n".join(lines))
+
+    # 활성 포지션 복구 알림
+    for sym, pos in active:
+        tg.send(
+            f"🔄 [{_short(sym)}] 저장된 포지션 복구: "
+            f"{pos.get('side')} entry=${pos.get('entry'):.2f}"
+        )
 
 
 # ── 텔레그램 핸들러 ────────────────────────────────────────────
