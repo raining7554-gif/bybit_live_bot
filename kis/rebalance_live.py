@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.request
 
 # 경로 자가설정: repo root(backtest_us용) + kis/(config·trader_overseas 등 bare import용).
@@ -72,6 +73,10 @@ RAMP = float(os.environ.get("REBALANCE_RAMP", "0.25"))
 RAMP_SELL = float(os.environ.get("REBALANCE_RAMP_SELL", str(RAMP)))
 # 전환 청산: 목표에 없는 기존 미국 보유종목을 전량 매도(현금화). 기본 off(안전).
 LIQUIDATE = os.environ.get("LIQUIDATE", "false").lower() == "true"
+# 주문 간 지연(초). 한 번에 십수개 주문을 쏘면 KIS 초당호출 제한에 걸려 api.post가
+# 예외를 던지고 "❌매수실패"로 잡힌다. 각 매수는 잔고조회까지 동반해 호출이 많으므로
+# 기본 0.6초 간격으로 throttle. 0으로 두면 지연 없음.
+ORDER_DELAY_SEC = float(os.environ.get("REBALANCE_ORDER_DELAY", "0.6"))
 
 
 def _fmt(plan, total_usd, paper):
@@ -154,6 +159,8 @@ def main():
     # ---- EXECUTE 1) 기존종목 청산 (전량 매도) ----
     done = []
     for p in sells:
+        if ORDER_DELAY_SEC > 0:
+            time.sleep(ORDER_DELAY_SEC)        # KIS 초당호출 제한 회피(throttle)
         try:
             ot.sell_overseas(p["ticker"], p.get("name", p["ticker"]),
                              p.get("exchange", "NAS"), p["qty"],
@@ -167,14 +174,25 @@ def main():
     for t, w, tgt_usd, cur_usd, step in plan:
         if step <= 5.0:                       # 매수분 미미하면 스킵
             continue
+        if ORDER_DELAY_SEC > 0:
+            time.sleep(ORDER_DELAY_SEC)        # KIS 초당호출 제한 회피(throttle)
         exch = EXCHANGE.get(t, "NAS")
         try:
             res = ot.buy_overseas(t, t, exch, reason="멀티에셋 점진 리밸런스",
                                   full_allocation_usd=step)
-            done.append(f"매수 {t} ${step:,.0f}" + ("" if res else " (미체결/거부)"))
+            if res:
+                done.append(f"매수 {t} ${step:,.0f}")
+            else:
+                # KIS 거부 사유(msg1)를 텔레그램으로 끌어올림 (ETP 미신청·소수점 불가·시간외 등)
+                why = ""
+                try:
+                    why = ot.get_last_buy_fail_msg()
+                except Exception:  # noqa: BLE001
+                    pass
+                done.append(f"❌{t}: {why[:90] if why else '미체결/거부(사유미상)'}")
         except Exception as e:  # noqa: BLE001
             print(f"[order] {t} 실패: {e}")
-            done.append(f"❌매수실패 {t}")
+            done.append(f"❌{t} 예외: {str(e)[:90]}")
 
     # ---- 체결 요약을 퀀트봇으로 ----
     if done:
