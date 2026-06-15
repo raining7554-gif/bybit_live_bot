@@ -86,8 +86,30 @@ def compute():
     return total, tgt, cw.index[-1]
 
 
+def _signal_state_path():
+    return os.environ.get("SIGNAL_STATE_FILE", "/tmp/multiasset_last_tickers.json")
+
+
+def _load_prev_tickers():
+    import json
+    try:
+        with open(_signal_state_path()) as f:
+            return set(json.load(f))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _save_tickers(tickers):
+    import json
+    try:
+        with open(_signal_state_path(), "w") as f:
+            json.dump(sorted(tickers), f)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def build_context(tgt: dict) -> str:
-    """이번 신호의 '시장 상황 + 왜 이 비중인지'를 사람이 읽을 텍스트로."""
+    """이번 신호의 '시장 상황 + 왜 이 비중인지 + 지난주 대비 변화'를 텍스트로."""
     from .assets_bundle import MACRO
     cm = load_assets().sort_index()
     cm = cm.reindex(cm["SPY"].dropna().index)
@@ -115,6 +137,23 @@ def build_context(tgt: dict) -> str:
         why = (f"저변동({v:.0%})→비중큼" if (v is not None and v == v and v < 0.15)
                else ("레버리지 위성" if t in SEC3X.values() or t == "TQQQ" else "추세보유"))
         lines.append(f"   {t} {w:.0%}: {why}")
+
+    # 지난주 대비 변화(신규 진입 / 제외) — 직전 보유종목을 파일로 기억해 비교
+    cur = set(tgt)
+    prev = _load_prev_tickers()
+    if prev is not None:
+        added = cur - prev
+        removed = prev - cur
+        if added or removed:
+            ch = "🔄 지난주 대비:"
+            if added:
+                ch += " 신규 " + ",".join(sorted(added))
+            if removed:
+                ch += " 제외 " + ",".join(sorted(removed))
+            lines.append(ch)
+        else:
+            lines.append("🔄 지난주 대비: 변동 없음")
+    _save_tickers(cur)
     return "\n".join(lines)
 
 
