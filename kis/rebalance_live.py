@@ -192,7 +192,7 @@ def main():
                 done.append(f"❌{t}: {why[:90] if why else '미체결/거부(사유미상)'}")
         except Exception as e:  # noqa: BLE001
             print(f"[order] {t} 실패: {e}")
-            done.append(f"❌{t} 예외: {str(e)[:90]}")
+            done.append(f"❌{t} 예외: {str(e)[:200]}")
 
     # ---- 체결 요약을 퀀트봇으로 ----
     if done:
