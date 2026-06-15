@@ -29,7 +29,7 @@ for _p in (_ROOT, _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from backtest_us.strategy_live import compute, SEC3X
+from backtest_us.strategy_live import compute, SEC3X, build_context
 
 
 # 퀀트봇(멀티에셋 전략 전용) 텔레그램 — 기존 kis 봇(TELEGRAM_TOKEN)과 분리.
@@ -138,6 +138,10 @@ def main():
     if sells:
         msg += "\n\n🧹 기존종목 청산(목표 외):\n" + "\n".join(
             f"  {p['ticker']:5} {p['qty']:g}주 전량매도" for p in sells)
+    try:
+        msg += "\n" + build_context(tgt)         # 왜 이 비중인지 + 시장상황
+    except Exception as e:  # noqa: BLE001
+        print(f"[설명 생성 실패] {e}")
     print(msg)
     quant_telegram(msg)          # 전용 퀀트봇으로 (기존 kis 봇과 분리)
 
