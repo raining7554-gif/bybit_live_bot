@@ -90,6 +90,15 @@ def main():
     import trader_overseas as ot
     paper = os.environ.get("KIS_PAPER", "false").lower() == "true"
 
+    # 신호 직전 최신 시세로 자산 번들 갱신(stale 데이터 방지). 실패시 기존 번들 사용.
+    if os.environ.get("REFRESH_BUNDLE", "true").lower() == "true":
+        try:
+            from backtest_us.assets_bundle import export as _export
+            _export()
+            print("[번들] 최신 시세로 갱신 완료")
+        except Exception as e:  # noqa: BLE001
+            print(f"[번들] 갱신 실패 — 기존 번들 사용: {e}")
+
     _, tgt, asof = compute()
     tgt = {t: w for t, w in tgt.items() if t not in SKIP}
 
