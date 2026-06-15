@@ -114,6 +114,11 @@ def _fmt(plan, total_usd, paper):
 
 def main():
     import trader_overseas as ot
+    # KIS Open API에는 유효한 해외 '소수점' 주문 TR이 없다(TTTS6036U → IGW00012 "TR ID
+    # 유효하지 않음"). 이 브리지는 환경변수 US_FRACTIONAL_ENABLED 값과 무관하게 항상
+    # 온주(정수) 주문 TR(TTTT1002U/1006U)을 쓰도록 강제한다 — 함수들이 호출 시점에
+    # 이 모듈 전역을 참조하므로 여기서 False로 덮으면 매수/매도/수량계산 전부 정수 모드.
+    ot.US_FRACTIONAL_ENABLED = False
     paper = os.environ.get("KIS_PAPER", "false").lower() == "true"
 
     # 신호 직전 최신 시세로 자산 번들 갱신(stale 데이터 방지). 실패시 기존 번들 사용.
