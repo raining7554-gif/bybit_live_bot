@@ -61,7 +61,26 @@ EXCHANGE = {
     "UUP": "AMS", "VNQ": "AMS",
     "TQQQ": "NAS", "TECL": "NAS",
     "SOXL": "AMS", "FAS": "AMS", "ERX": "AMS", "LABU": "AMS", "NUGT": "AMS",
+    # 저가 share-class (소액 계좌용) — 거래소는 원본과 동일
+    "SPLG": "AMS", "QQQM": "NAS", "GLDM": "AMS",
 }
+
+# 소액 계좌용 저가 share-class 매핑. KIS Open API는 해외 소수점 주문 TR을 제공하지
+# 않아(온주만 가능) SPY($600)·QQQ($530)·GLD($240)는 소액에서 0주 반올림돼 매수 불가.
+# 전략/백테스트는 좌측 티커(번들 시세)로 그대로 계산하고, 주문/잔고/청산만 '같은 지수,
+# 1주값이 싼' 우측 ETF로 처리해 소액에서도 전 종목 매수가 되게 한다.
+TRADE_ALIAS = {
+    "SPY": "SPLG",   # S&P 500   (~$600 → ~$75)
+    "QQQ": "QQQM",   # Nasdaq-100 (~$530 → ~$220)
+    "GLD": "GLDM",   # Gold       (~$240 → ~$65)
+}
+
+
+def _exec_ticker(t: str) -> str:
+    """전략 티커 → 실제 KIS 주문 티커(저가 share-class면 치환)."""
+    return TRADE_ALIAS.get(t, t)
+
+
 SKIP = {"BTC-USD", "ETH-USD"}          # crypto -> bybit, not KIS
 EXECUTE = os.environ.get("REBALANCE_EXECUTE", "false").lower() == "true"
 # 점진(분할) 리밸런스: 매 실행마다 목표와의 격차 중 이 비율만 이동.
@@ -86,7 +105,9 @@ def _fmt(plan, total_usd, paper):
     for t, w, tgt_usd, cur_usd, step in plan:
         arrow = "매수" if step > 0 else ("매도" if step < 0 else "유지")
         lev = "⚡" if (t == "TQQQ" or t in SEC3X.values()) else ""
-        lines.append(f"{t:5}{lev} 목표 {w:4.1%}(${tgt_usd:,.0f}) 현재 ${cur_usd:,.0f}"
+        xt = _exec_ticker(t)
+        label = f"{t}→{xt}" if xt != t else t            # 별칭이면 실제 주문 티커 표기
+        lines.append(f"{label:11}{lev} 목표 {w:4.1%}(${tgt_usd:,.0f}) 현재 ${cur_usd:,.0f}"
                      f"  → 이번 {arrow} ${abs(step):,.0f}")
     return "\n".join(lines)
 
@@ -120,7 +141,9 @@ def main():
     plan = []
     for t, w in sorted(tgt.items(), key=lambda x: -x[1]):
         tgt_usd = w * total_usd
-        cur_usd = float((holdings.get(t) or {}).get("eval_usd", 0.0))
+        # 보유 평가액은 '실제 주문 티커'(별칭) 기준으로 조회 — SPLG로 보유 중인데
+        # SPY로 0을 보면 매주 중복매수가 난다.
+        cur_usd = float((holdings.get(_exec_ticker(t)) or {}).get("eval_usd", 0.0))
         gap = tgt_usd - cur_usd
         step = (RAMP if gap >= 0 else RAMP_SELL) * gap   # 이번 회차 이동분(매수/매도 속도 분리)
         plan.append((t, w, tgt_usd, cur_usd, step))
@@ -134,8 +157,9 @@ def main():
         except Exception as e:  # noqa: BLE001
             us = {}
             print(f"[청산] 보유조회 실패: {e}")
+        keep = {_exec_ticker(t) for t in tgt}  # 실제 보유 티커(별칭) 기준으로 비교
         for tk, pos in us.items():
-            if tk in tgt or tk in SKIP:
+            if tk in keep or tk in SKIP:
                 continue                       # 목표 종목은 유지(리밸런스가 처리)
             sells.append(pos)
 
@@ -176,12 +200,13 @@ def main():
             continue
         if ORDER_DELAY_SEC > 0:
             time.sleep(ORDER_DELAY_SEC)        # KIS 초당호출 제한 회피(throttle)
-        exch = EXCHANGE.get(t, "NAS")
+        xt = _exec_ticker(t)                   # 저가 share-class면 실제 주문 티커로 치환
+        exch = EXCHANGE.get(xt, "NAS")
         try:
-            res = ot.buy_overseas(t, t, exch, reason="멀티에셋 점진 리밸런스",
+            res = ot.buy_overseas(xt, xt, exch, reason="멀티에셋 점진 리밸런스",
                                   full_allocation_usd=step)
             if res:
-                done.append(f"매수 {t} ${step:,.0f}")
+                done.append(f"매수 {xt} ${step:,.0f}")
             else:
                 # KIS 거부 사유(msg1)를 텔레그램으로 끌어올림 (ETP 미신청·소수점 불가·시간외 등)
                 why = ""
@@ -189,10 +214,10 @@ def main():
                     why = ot.get_last_buy_fail_msg()
                 except Exception:  # noqa: BLE001
                     pass
-                done.append(f"❌{t}: {why[:90] if why else '미체결/거부(사유미상)'}")
+                done.append(f"❌{xt}: {why[:90] if why else '미체결/거부(사유미상)'}")
         except Exception as e:  # noqa: BLE001
-            print(f"[order] {t} 실패: {e}")
-            done.append(f"❌{t} 예외: {str(e)[:200]}")
+            print(f"[order] {xt} 실패: {e}")
+            done.append(f"❌{xt} 예외: {str(e)[:200]}")
 
     # ---- 체결 요약을 퀀트봇으로 ----
     if done:
