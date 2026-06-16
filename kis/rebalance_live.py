@@ -219,7 +219,9 @@ def main():
                     why = ot.get_last_buy_fail_msg()
                 except Exception:  # noqa: BLE001
                     pass
-                done.append(f"❌{xt}: {why[:90] if why else '미체결/거부(사유미상)'}")
+                # why 가 비면 KIS 거부가 아니라 수량 0(예수금 부족 또는 1주값>배정액).
+                done.append(f"❌{xt}: {why[:90]}" if why
+                            else f"❌{xt}: 0주(예수금 부족 또는 1주값>배정 ${step:,.0f})")
         except Exception as e:  # noqa: BLE001
             print(f"[order] {xt} 실패: {e}")
             done.append(f"❌{xt} 예외: {str(e)[:200]}")
