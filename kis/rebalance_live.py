@@ -134,8 +134,34 @@ def main():
     tgt = {t: w for t, w in tgt.items() if t not in SKIP}
 
     bal = ot.get_overseas_balance()
-    total_usd = bal.get("total_eval_usd") or bal.get("available_usd") or 0.0
-    holdings = bal.get("holdings", {}) or {}     # {ticker: {qty, eval_usd}} if available
+    available_usd = float(bal.get("available_usd") or 0.0)
+
+    # 실제 종목별 보유 조회. get_overseas_balance 는 총평가/가용 USD만 주고 종목별
+    # 보유를 안 줘서, 예전엔 cur_usd 가 매 실행 0이 되어 같은 매수를 반복 → 가장 싸고
+    # 비중 큰 종목(HYG 등)이 과매수되는 버그가 있었다. load_us_holdings 로 실제 보유를
+    # 읽고 eval_usd = 보유수량 × 현재가(실패시 평단가)로 채운다.
+    us_pos = {}
+    try:
+        from main import load_us_holdings
+        us_pos = load_us_holdings() or {}
+    except Exception as e:  # noqa: BLE001
+        print(f"[보유조회] 실패: {e}")
+    holdings = {}
+    for tk, pos in us_pos.items():
+        q = float(pos.get("qty", 0.0) or 0.0)
+        try:
+            px = ot._get_price_safe(pos.get("exchange", "NAS"), tk)
+        except Exception:  # noqa: BLE001
+            px = 0.0
+        if px <= 0:
+            px = float(pos.get("buy_price", 0.0) or 0.0)   # 현재가 실패시 평단가 근사
+        holdings[tk] = {**pos, "qty": q, "price": px, "eval_usd": q * px}
+
+    # 운용 총액(USD) = 보유 평가액 합 + 가용 USD 현금. KIS 총평가(tot_asst_amt)는 원화
+    # 환산일 수 있어 그대로 쓰면 목표가 ~1300배로 부풀 위험이 있다. USD로 신뢰 가능한
+    # 두 값(내가 현재가로 계산한 보유합 + 가용 USD)만으로 총액을 구성한다.
+    holdings_usd = sum(float(h.get("eval_usd", 0.0)) for h in holdings.values())
+    total_usd = holdings_usd + available_usd
 
     # 예산 상한: REBALANCE_BUDGET_USD>0 면 그 금액만 멀티에셋에 배분(소액 실전 테스트
     # 또는 계좌 일부만 운용). 0이면 계좌 전체.
@@ -156,14 +182,8 @@ def main():
     # ---- 전환: 목표에 없는 기존 미국 보유종목 청산(LIQUIDATE=true) ----
     sells = []
     if LIQUIDATE:
-        try:
-            from main import load_us_holdings
-            us = load_us_holdings() or {}
-        except Exception as e:  # noqa: BLE001
-            us = {}
-            print(f"[청산] 보유조회 실패: {e}")
         keep = {_exec_ticker(t) for t in tgt}  # 실제 보유 티커(별칭) 기준으로 비교
-        for tk, pos in us.items():
+        for tk, pos in us_pos.items():
             if tk in keep or tk in SKIP:
                 continue                       # 목표 종목은 유지(리밸런스가 처리)
             sells.append(pos)
@@ -225,6 +245,30 @@ def main():
         except Exception as e:  # noqa: BLE001
             print(f"[order] {xt} 실패: {e}")
             done.append(f"❌{xt} 예외: {str(e)[:200]}")
+
+    # ---- EXECUTE 3) 초과 비중 분할 매도(trim) — 목표보다 많이 든 종목을 RAMP_SELL 속도로 축소.
+    # step<0 인 종목이 대상. 보유수량 한도 내 온주로 매도. (HYG 과매수 같은 쏠림을 되돌린다.)
+    for t, w, tgt_usd, cur_usd, step in plan:
+        if step >= -5.0:                      # 매도분 미미하면 스킵 (step<0 가 축소)
+            continue
+        xt = _exec_ticker(t)
+        pos = holdings.get(xt)
+        if not pos or pos.get("qty", 0) <= 0 or pos.get("price", 0) <= 0:
+            continue
+        sell_qty = int(min(abs(step) / pos["price"], pos["qty"]))   # 온주, 보유수량 한도
+        if sell_qty <= 0:
+            continue
+        if ORDER_DELAY_SEC > 0:
+            time.sleep(ORDER_DELAY_SEC)        # KIS 초당호출 제한 회피(throttle)
+        try:
+            ok = ot.sell_overseas(xt, pos.get("name", xt), pos.get("exchange", "NAS"),
+                                  sell_qty, float(pos.get("buy_price", 0.0)),
+                                  reason="멀티에셋 비중축소(trim)")
+            done.append(f"매도 {xt} {sell_qty}주(비중축소)" if ok
+                        else f"❌{xt} 축소 미체결/거부")
+        except Exception as e:  # noqa: BLE001
+            print(f"[trim] {xt} 실패: {e}")
+            done.append(f"❌{xt} 축소예외: {str(e)[:120]}")
 
     # ---- 체결 요약을 퀀트봇으로 ----
     if done:
