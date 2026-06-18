@@ -219,7 +219,32 @@ def main():
             print(f"[청산] {p['ticker']} 실패: {e}")
             done.append(f"❌매도실패 {p['ticker']}")
 
-    # ---- EXECUTE 2) 이번 회차 분할분만큼 매수 (진입/추가) ----
+    # ---- EXECUTE 2) 초과 비중 분할 매도(trim) — 매수보다 먼저 실행해 현금을 확보한다.
+    # 목표보다 많이 든 종목(step<0)을 RAMP_SELL 속도로 보유수량 한도 내 온주 매도.
+    # (HYG 과매수 같은 쏠림을 되돌리고, 그 대금으로 부족분을 채울 수 있게.)
+    for t, w, tgt_usd, cur_usd, step in plan:
+        if step >= -5.0:                      # 매도분 미미하면 스킵 (step<0 가 축소)
+            continue
+        xt = _exec_ticker(t)
+        pos = holdings.get(xt)
+        if not pos or pos.get("qty", 0) <= 0 or pos.get("price", 0) <= 0:
+            continue
+        sell_qty = int(min(abs(step) / pos["price"], pos["qty"]))   # 온주, 보유수량 한도
+        if sell_qty <= 0:
+            continue
+        if ORDER_DELAY_SEC > 0:
+            time.sleep(ORDER_DELAY_SEC)        # KIS 초당호출 제한 회피(throttle)
+        try:
+            ok = ot.sell_overseas(xt, pos.get("name", xt), pos.get("exchange", "NAS"),
+                                  sell_qty, float(pos.get("buy_price", 0.0)),
+                                  reason="멀티에셋 비중축소(trim)")
+            done.append(f"매도 {xt} {sell_qty}주(비중축소)" if ok
+                        else f"❌{xt} 축소 미체결/거부")
+        except Exception as e:  # noqa: BLE001
+            print(f"[trim] {xt} 실패: {e}")
+            done.append(f"❌{xt} 축소예외: {str(e)[:120]}")
+
+    # ---- EXECUTE 3) 이번 회차 분할분만큼 매수 (진입/추가) ----
     for t, w, tgt_usd, cur_usd, step in plan:
         if step <= 5.0:                       # 매수분 미미하면 스킵
             continue
@@ -245,30 +270,6 @@ def main():
         except Exception as e:  # noqa: BLE001
             print(f"[order] {xt} 실패: {e}")
             done.append(f"❌{xt} 예외: {str(e)[:200]}")
-
-    # ---- EXECUTE 3) 초과 비중 분할 매도(trim) — 목표보다 많이 든 종목을 RAMP_SELL 속도로 축소.
-    # step<0 인 종목이 대상. 보유수량 한도 내 온주로 매도. (HYG 과매수 같은 쏠림을 되돌린다.)
-    for t, w, tgt_usd, cur_usd, step in plan:
-        if step >= -5.0:                      # 매도분 미미하면 스킵 (step<0 가 축소)
-            continue
-        xt = _exec_ticker(t)
-        pos = holdings.get(xt)
-        if not pos or pos.get("qty", 0) <= 0 or pos.get("price", 0) <= 0:
-            continue
-        sell_qty = int(min(abs(step) / pos["price"], pos["qty"]))   # 온주, 보유수량 한도
-        if sell_qty <= 0:
-            continue
-        if ORDER_DELAY_SEC > 0:
-            time.sleep(ORDER_DELAY_SEC)        # KIS 초당호출 제한 회피(throttle)
-        try:
-            ok = ot.sell_overseas(xt, pos.get("name", xt), pos.get("exchange", "NAS"),
-                                  sell_qty, float(pos.get("buy_price", 0.0)),
-                                  reason="멀티에셋 비중축소(trim)")
-            done.append(f"매도 {xt} {sell_qty}주(비중축소)" if ok
-                        else f"❌{xt} 축소 미체결/거부")
-        except Exception as e:  # noqa: BLE001
-            print(f"[trim] {xt} 실패: {e}")
-            done.append(f"❌{xt} 축소예외: {str(e)[:120]}")
 
     # ---- 체결 요약을 퀀트봇으로 ----
     if done:
