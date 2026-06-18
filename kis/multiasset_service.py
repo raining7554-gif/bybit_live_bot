@@ -31,7 +31,7 @@ for _p in (_ROOT, _HERE):
 import rebalance_live
 
 CHECK_SEC = int(os.environ.get("CHECK_INTERVAL_SEC", "1800"))     # 30분마다 점검
-MIN_GAP_SEC = int(os.environ.get("REBALANCE_PERIOD_SEC", str(6 * 24 * 3600)))  # 최소 6일 간격
+MIN_GAP_SEC = int(os.environ.get("REBALANCE_PERIOD_SEC", str(1 * 24 * 3600)))  # 최소 1일 간격(매일)
 FORCE_ANYTIME = os.environ.get("REBALANCE_ANYTIME", "false").lower() == "true"  # 장시간 무시(테스트)
 
 
