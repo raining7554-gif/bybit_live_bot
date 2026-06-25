@@ -138,6 +138,21 @@ def build_context(tgt: dict) -> str:
                else ("레버리지 위성" if t in SEC3X.values() or t == "TQQQ" else "추세보유"))
         lines.append(f"   {t} {w:.0%}: {why}")
 
+    # 🌐 매크로 해석 — 포지션이 함의하는 시장 뷰(가격 기반, 뉴스와 대조용)
+    lev = tgt.get("TQQQ", 0) + sum(tgt.get(x, 0) for x in SEC3X.values())
+    bonds = tgt.get("HYG", 0) + tgt.get("TLT", 0) + tgt.get("IEF", 0)
+    macro = []
+    if tgt.get("UUP", 0) > 0.08:
+        macro.append("강달러 베팅")
+    macro.append("위험선호" if n_on >= n_tot * 0.6 else
+                 ("위험회피·방어" if n_on < n_tot * 0.3 else "혼조"))
+    if lev > 0.20:
+        macro.append("기술/성장 레버리지 큼")
+    if bonds > 0.20:
+        macro.append("채권 비중 큼(금리·신용 민감)")
+    lines.append("🌐 매크로 해석: " + " · ".join(macro) +
+                 " — 시스템이 가격으로 읽은 현재 국면(뉴스와 대조해보세요)")
+
     # 지난주 대비 변화(신규 진입 / 제외) — 직전 보유종목을 파일로 기억해 비교
     cur = set(tgt)
     prev = _load_prev_tickers()
