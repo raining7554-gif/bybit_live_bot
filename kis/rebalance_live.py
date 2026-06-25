@@ -112,6 +112,25 @@ def _fmt(plan, total_usd, paper):
     return "\n".join(lines)
 
 
+def _account_status(holdings, holdings_usd, available_usd, account_total, total):
+    """계좌 현황(총평가·평가손익) + 전략 백테스트 전체기간 성과 한 블록."""
+    cost = sum(float(p.get("qty", 0) or 0) * float(p.get("buy_price", 0) or 0)
+               for p in holdings.values())
+    pnl = holdings_usd - cost
+    pnl_pct = (pnl / cost * 100) if cost > 0 else 0.0
+    lines = ["💰 계좌 현황",
+             f"· 총 평가액 ${account_total:,.0f}  (보유 ${holdings_usd:,.0f} + 현금 ${available_usd:,.0f})",
+             f"· 평가손익 ${pnl:+,.0f} ({pnl_pct:+.1f}%)  ← 보유종목 매입가 대비(현재수익률)"]
+    try:
+        from backtest_us.metrics import _curve_stats
+        st = _curve_stats((1 + total.loc["2010-01-01":]).cumprod(), "LIVE")
+        lines.append(f"· 전략 전체기간(백테스트 2010~): CAGR {st['cagr']:+.0%} / "
+                     f"MaxDD {st['mdd']:+.0%} / Sharpe {st['sharpe']:.2f}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[성과 계산 실패] {e}")
+    return "\n".join(lines)
+
+
 def main():
     import trader_overseas as ot
     # KIS Open API에는 유효한 해외 '소수점' 주문 TR이 없다(TTTS6036U → IGW00012 "TR ID
@@ -130,7 +149,7 @@ def main():
         except Exception as e:  # noqa: BLE001
             print(f"[번들] 갱신 실패 — 기존 번들 사용: {e}")
 
-    _, tgt, asof = compute()
+    total, tgt, asof = compute()
     tgt = {t: w for t, w in tgt.items() if t not in SKIP}
 
     bal = ot.get_overseas_balance()
@@ -161,7 +180,8 @@ def main():
     # 환산일 수 있어 그대로 쓰면 목표가 ~1300배로 부풀 위험이 있다. USD로 신뢰 가능한
     # 두 값(내가 현재가로 계산한 보유합 + 가용 USD)만으로 총액을 구성한다.
     holdings_usd = sum(float(h.get("eval_usd", 0.0)) for h in holdings.values())
-    total_usd = holdings_usd + available_usd
+    account_total = holdings_usd + available_usd   # 계좌 전체(예산상한 적용 전)
+    total_usd = account_total
 
     # 예산 상한: REBALANCE_BUDGET_USD>0 면 그 금액만 멀티에셋에 배분(소액 실전 테스트
     # 또는 계좌 일부만 운용). 0이면 계좌 전체.
@@ -189,6 +209,8 @@ def main():
             sells.append(pos)
 
     msg = _fmt(plan, total_usd, paper)
+    msg += "\n\n" + _account_status(holdings, holdings_usd, available_usd,
+                                    account_total, total)
     if sells:
         msg += "\n\n🧹 기존종목 청산(목표 외):\n" + "\n".join(
             f"  {p['ticker']:5} {p['qty']:g}주 전량매도" for p in sells)
