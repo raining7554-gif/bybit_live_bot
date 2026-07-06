@@ -589,6 +589,209 @@ def deep_diagnose(*, bot_id: str, days: int = 30) -> str:
     return "\n".join(lines)
 
 
+def market_diagnose(*, bot_id: str, days: int = 30) -> str:
+    """v6.70: 시장 흐름 × 전략 궁합 세밀 분석. /market 명령용.
+
+    진입 시점 market_snapshot (RSI/ADX/BB/변동성) 을 활용해
+    "어떤 시장 상태에서 우리 전략이 이겼나" 를 분석.
+
+    차원:
+      - 주차별 PnL 추세 (최근 개선/악화 정량화)
+      - 시장 레짐별 (4H ADX: 추세장 trending vs 횡보장 ranging)
+      - 변동성 구간별 (4H bb_width: 저/중/고)
+      - RSI 진입 구간별 (과매도/중립/과매수 진입 성과)
+      - 요일별 (KST)
+    """
+    import json as _json
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+
+    trades = recent_trades(bot_id=bot_id, since_seconds=days * 86400, limit=10000)
+    if not trades:
+        return f"📈 시장 진단 — 지난 {days}일 거래 없음"
+
+    def _snap(t):
+        """market_snapshot JSON 파싱. 실패시 None."""
+        raw = t.get("market_snapshot")
+        if not raw:
+            return None
+        try:
+            return _json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return None
+
+    def _tf(snap, tf, key):
+        """snap['4h']['adx'] 안전 추출."""
+        if not snap:
+            return None
+        d = snap.get(tf, {})
+        if not isinstance(d, dict):
+            return None
+        v = d.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    n = len(trades)
+    total_pnl = sum(t["pnl"] for t in trades)
+    lines = [
+        f"📈 <b>시장 흐름 × 전략 궁합</b> ({bot_id}, {days}일)",
+        f"━━━━━━━━━━━━━━━━━",
+        f"총 {n}건 / PnL {total_pnl:+.2f}",
+    ]
+
+    # ── 1. 주차별 추세 (핵심: 최근이 정말 좋아졌나) ──
+    now = datetime.now(timezone.utc).timestamp()
+    lines.append("\n<b>📅 주차별 추세 (최근→과거)</b>")
+    for w in range(4):
+        w_start = now - (w + 1) * 7 * 86400
+        w_end = now - w * 7 * 86400
+        wk = [t for t in trades
+              if w_start <= (t.get("exit_ts") or t.get("ts") or 0) < w_end]
+        if not wk:
+            continue
+        wn = len(wk)
+        ww = sum(1 for t in wk if t["pnl"] >= 0)
+        wp = sum(t["pnl"] for t in wk)
+        wr = ww / wn * 100 if wn else 0
+        label = ["이번주", "1주전", "2주전", "3주전"][w]
+        icon = "🟢" if wp > 0 else "🔴"
+        lines.append(f"  {icon} {label}: {wn}건 {wr:.0f}% {wp:+.2f}")
+
+    # ── 2. 시장 레짐별 (4H ADX 기준) ──
+    reg_buckets = {"추세장(ADX≥25)": [], "약추세(18~25)": [], "횡보장(ADX<18)": [], "?": []}
+    for t in trades:
+        adx4 = _tf(_snap(t), "4h", "adx")
+        if adx4 is None:
+            reg_buckets["?"].append(t)
+        elif adx4 >= 25:
+            reg_buckets["추세장(ADX≥25)"].append(t)
+        elif adx4 >= 18:
+            reg_buckets["약추세(18~25)"].append(t)
+        else:
+            reg_buckets["횡보장(ADX<18)"].append(t)
+    has_regime = any(len(v) > 0 for k, v in reg_buckets.items() if k != "?")
+    if has_regime:
+        lines.append("\n<b>🌊 시장 레짐별 (진입시 4H ADX)</b>")
+        for k in ["추세장(ADX≥25)", "약추세(18~25)", "횡보장(ADX<18)", "?"]:
+            ts = reg_buckets[k]
+            if not ts:
+                continue
+            tn = len(ts); tw = sum(1 for t in ts if t["pnl"] >= 0)
+            tp = sum(t["pnl"] for t in ts)
+            wr = tw / tn * 100 if tn else 0
+            icon = "🟢" if tp > 0 else "🔴"
+            lines.append(f"  {icon} {k}: {tn}건 {wr:.0f}% {tp:+.2f}")
+
+    # ── 3. 변동성 구간별 (4H bb_width) ──
+    vol_vals = [(_tf(_snap(t), "4h", "bb_width"), t) for t in trades]
+    vol_vals = [(v, t) for v, t in vol_vals if v is not None]
+    if len(vol_vals) >= 10:
+        sorted_v = sorted(v for v, _ in vol_vals)
+        lo_th = sorted_v[len(sorted_v) // 3]
+        hi_th = sorted_v[2 * len(sorted_v) // 3]
+        vb = {"저변동": [], "중변동": [], "고변동": []}
+        for v, t in vol_vals:
+            if v <= lo_th:
+                vb["저변동"].append(t)
+            elif v <= hi_th:
+                vb["중변동"].append(t)
+            else:
+                vb["고변동"].append(t)
+        lines.append("\n<b>📊 변동성 구간별 (4H BB폭)</b>")
+        for k in ["저변동", "중변동", "고변동"]:
+            ts = vb[k]
+            if not ts:
+                continue
+            tn = len(ts); tw = sum(1 for t in ts if t["pnl"] >= 0)
+            tp = sum(t["pnl"] for t in ts)
+            wr = tw / tn * 100 if tn else 0
+            icon = "🟢" if tp > 0 else "🔴"
+            lines.append(f"  {icon} {k}: {tn}건 {wr:.0f}% {tp:+.2f}")
+
+    # ── 4. RSI 진입 구간별 (15m) ──
+    rsi_buckets = {"과매도(<35)": [], "약세(35~45)": [], "중립(45~55)": [],
+                   "강세(55~65)": [], "과매수(>65)": []}
+    rsi_any = False
+    for t in trades:
+        rsi = _tf(_snap(t), "15m", "rsi")
+        if rsi is None:
+            continue
+        rsi_any = True
+        if rsi < 35: rsi_buckets["과매도(<35)"].append(t)
+        elif rsi < 45: rsi_buckets["약세(35~45)"].append(t)
+        elif rsi < 55: rsi_buckets["중립(45~55)"].append(t)
+        elif rsi < 65: rsi_buckets["강세(55~65)"].append(t)
+        else: rsi_buckets["과매수(>65)"].append(t)
+    if rsi_any:
+        lines.append("\n<b>📉 진입 RSI 구간별 (15m)</b>")
+        for k in ["과매도(<35)", "약세(35~45)", "중립(45~55)", "강세(55~65)", "과매수(>65)"]:
+            ts = rsi_buckets[k]
+            if not ts:
+                continue
+            tn = len(ts); tw = sum(1 for t in ts if t["pnl"] >= 0)
+            tp = sum(t["pnl"] for t in ts)
+            wr = tw / tn * 100 if tn else 0
+            icon = "🟢" if tp > 0 else "🔴"
+            lines.append(f"  {icon} {k}: {tn}건 {wr:.0f}% {tp:+.2f}")
+
+    # ── 5. 요일별 (KST) ──
+    dow_names = ["월", "화", "수", "목", "금", "토", "일"]
+    dow_buckets: dict[int, list] = {}
+    for t in trades:
+        ts_unix = t.get("exit_ts") or t.get("ts") or 0
+        try:
+            dt = datetime.fromtimestamp(int(ts_unix), tz=timezone.utc).astimezone(KST)
+            dow_buckets.setdefault(dt.weekday(), []).append(t)
+        except Exception:
+            pass
+    if dow_buckets:
+        lines.append("\n<b>📆 요일별 (KST)</b>")
+        for d in range(7):
+            ts = dow_buckets.get(d, [])
+            if not ts:
+                continue
+            tn = len(ts); tw = sum(1 for t in ts if t["pnl"] >= 0)
+            tp = sum(t["pnl"] for t in ts)
+            wr = tw / tn * 100 if tn else 0
+            icon = "🟢" if tp > 0 else "🔴"
+            lines.append(f"  {icon} {dow_names[d]}: {tn}건 {wr:.0f}% {tp:+.2f}")
+
+    # ── 자동 인사이트 ──
+    insights = []
+    # 레짐 궁합
+    if has_regime:
+        best_reg = max(
+            [(k, sum(t["pnl"] for t in v), len(v)) for k, v in reg_buckets.items()
+             if k != "?" and len(v) >= 3],
+            key=lambda x: x[1], default=None)
+        if best_reg and best_reg[1] > 0:
+            insights.append(
+                f"🌊 '{best_reg[0]}' 에서 가장 수익 ({best_reg[1]:+.2f}) "
+                f"— 이 레짐일 때 전략이 잘 맞음")
+    # 주차 추세
+    wk_pnls = []
+    for w in range(4):
+        w_start = now - (w + 1) * 7 * 86400
+        w_end = now - w * 7 * 86400
+        wp = sum(t["pnl"] for t in trades
+                 if w_start <= (t.get("exit_ts") or t.get("ts") or 0) < w_end)
+        wk_pnls.append(wp)
+    if len(wk_pnls) >= 2 and wk_pnls[0] > 0 and wk_pnls[0] > wk_pnls[1]:
+        insights.append("📈 이번주가 지난주보다 개선 — 현재 시장이 전략과 궁합 좋음")
+    elif len(wk_pnls) >= 2 and wk_pnls[0] < 0:
+        insights.append("📉 이번주 마이너스 — 시장 국면 변화 가능성, 관찰 필요")
+
+    if insights:
+        lines.append("\n<b>🧠 궁합 인사이트</b>")
+        for ins in insights:
+            lines.append(f"  • {ins}")
+
+    lines.append("\n💡 이 데이터로 '어떤 시장에서 우리가 강한지' 파악")
+    return "\n".join(lines)
+
+
 def update_proposal_status(proposal_id: int, status: str) -> bool:
     try:
         conn = _conn()
