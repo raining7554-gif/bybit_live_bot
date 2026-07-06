@@ -26,10 +26,12 @@ def _parse_symbols() -> list[str]:
 SYMBOLS    = _parse_symbols()
 # v6.49 A: SOL universe 제외 (30일 -$138 단독 손실원)
 # v6.66: BTC 도 30일 -$81 손실원 추가 (ETH/XRP/BNB 만 흑자 +$135)
+# v6.70: BNB 도 제외 (7일 24% -$1.43 / 30일 30% -$5.77 양 기간 부진)
+#        → ETH/XRP 만 거래 (양 기간 승률 40%+ 유지 종목)
 # env SYMBOL_BLACKLIST 로 차단 종목 콤마 구분 지정
 _blacklist = set(
     s.strip().upper()
-    for s in os.environ.get("SYMBOL_BLACKLIST", "SOLUSDT,BTCUSDT").split(",")
+    for s in os.environ.get("SYMBOL_BLACKLIST", "SOLUSDT,BTCUSDT,BNBUSDT").split(",")
     if s.strip()
 )
 SYMBOLS    = [s for s in SYMBOLS if s not in _blacklist]
@@ -209,8 +211,10 @@ QTY_DECIMALS = {
 DISASTER_SL_PCT = 0.02
 
 # v6.33A → v6.47: 시간대 자동 차단 default OFF (사용자 요청 "정지 빼줘")
-# env 로 다시 활성 원하면: BLOCKED_HOURS_KST="6,7,8,9,10,11"
-BLOCKED_HOURS_KST = os.environ.get("BLOCKED_HOURS_KST", "")
+# v6.70: 06~12시 KST 재활성 — 실거래 데이터상 최악 시간대
+#        00~06: 39% -$15 / 06~12: 25% -$22 (최악) / 12~18: 38% -$18 / 18~24: 46% +$52
+#        승률 25% 구간만 차단. env 로 조정/해제 가능 (BLOCKED_HOURS_KST="")
+BLOCKED_HOURS_KST = os.environ.get("BLOCKED_HOURS_KST", "6,7,8,9,10,11")
 
 def _parse_blocked_hours() -> set:
     s = BLOCKED_HOURS_KST.strip()

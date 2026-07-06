@@ -836,6 +836,21 @@ def _setup_handlers():
         except Exception as e:
             tg.send(f"⚠️ /diagnose 오류: {e}")
 
+    def market_cmd():
+        """v6.70: 시장 흐름 × 전략 궁합 세밀 분석. /market [일수]."""
+        try:
+            from intelligence import journal as _ij
+            days = 30
+            try:
+                arg = (tg._last_args or "").strip()
+                if arg:
+                    days = max(7, min(90, int(arg)))
+            except Exception:
+                pass
+            tg.send(_ij.market_diagnose(bot_id=ai.BOT_ID, days=days))
+        except Exception as e:
+            tg.send(f"⚠️ /market 오류: {e}")
+
     def agent_cmd():
         """v6.43: Claude Agent 수동 트리거."""
         if not cfg.CLAUDE_AGENT_ENABLED:
@@ -1106,6 +1121,7 @@ def _setup_handlers():
         "/symbols": symbols_cmd,
         "/weights": weights_cmd,
         "/diagnose": diagnose_cmd,
+        "/market":  market_cmd,
         "/regime":  regime_cmd,
         "/agent":   agent_cmd,
         "/agent_ping": agent_ping_cmd,
