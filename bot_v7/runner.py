@@ -1372,14 +1372,20 @@ def main():
         cap_str = "BASE (mid/high → base)"
     else:
         cap_str = "OFF"
+    blocked_hrs = os.environ.get("BLOCKED_HOURS_KST", "6,7,8,9,10,11")
+    blocked_str = f"{blocked_hrs}시 차단" if blocked_hrs.strip() else "없음"
+    rsi_str = (f"RSI<{cfg.RSI_ENTRY_MIN:.0f} 차단" if cfg.RSI_ENTRY_BLOCK_ENABLED
+               else "OFF")
     tg.send(
-        f"🚀 v6.66 시작 — 데이터 기반 생존 모드 ({n}종, mode={cfg.STRATEGY_MODE})\n"
+        f"🚀 v6.71 시작 — 생존 모드 + 국면 필터 ({n}종, mode={cfg.STRATEGY_MODE})\n"
         f"봇: {bot_label}\n"
         f"심볼: {sym_label} | 잔고: ${eq0:,.2f}\n"
-        f"━ v6.66 생존 모드 핵심 ━\n"
+        f"━ v6.71 핵심 필터 ━\n"
         f"  Tier 캡: {cap_str}\n"
         f"  레버리지 상한: {cfg.MAX_LEVERAGE_CAP:.0f}x\n"
-        f"  블랙리스트: {os.environ.get('SYMBOL_BLACKLIST', 'SOLUSDT,BTCUSDT')}\n"
+        f"  블랙리스트: {os.environ.get('SYMBOL_BLACKLIST', 'SOLUSDT,BTCUSDT,BNBUSDT')}\n"
+        f"  RSI 필터: {rsi_str} (하락장 방어)\n"
+        f"  시간대: {blocked_str} (KST)\n"
         f"  Min R:R 필터: {cfg.MIN_RR_FILTER:.1f} (수수료 차감 후)\n"
         f"━ 전략 라우터 ━\n"
         f"  trending → D + 🌊SWING (no MR)\n"
