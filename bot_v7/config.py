@@ -113,6 +113,13 @@ LEV_TIER_HIGH     = 20.0
 # v6.66: default 20 → 5 (데이터 + 학술 둘 다 5x 지지)
 MAX_LEVERAGE_CAP  = float(os.environ.get("MAX_LEVERAGE_CAP", "5.0"))
 
+# v6.71: RSI 극단 진입 차단 (실거래 데이터 기반)
+# /market 30일: 과매도(<35) 88건 19% -$49 (칼날 잡기), 과매수(>65) 44% +$56
+# 하단(과매도)만 차단. D 전략 진입에만 적용 (MR 은 반전이라 제외).
+# 하락장 방어 효과 — 6월 급락장에서 이 구간 손실 집중.
+RSI_ENTRY_BLOCK_ENABLED = os.environ.get("RSI_ENTRY_BLOCK", "true").lower() == "true"
+RSI_ENTRY_MIN = float(os.environ.get("RSI_ENTRY_MIN", "35.0"))
+
 # v6.66: 모든 신호를 probe (5x) 이하로 강제. base/mid/high → probe 사이즈.
 # 데이터: base -$0.59/거래, mid -$8.94, high -$17.61 vs probe +$0.30, micro +$0.31
 # 점수가 결과 예측 못함 (승리 63.1 vs 패배 64.1) → 큰 사이즈 의미 없음
