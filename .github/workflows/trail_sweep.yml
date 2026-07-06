@@ -15,6 +15,15 @@ on:
         description: "초기 자본 ($)"
         required: false
         default: "250"
+  # 트리거 파일이 main 에 push 되면 자동 실행 (버튼 못 찾을 때 우회)
+  push:
+    branches: [main]
+    paths:
+      - ".github/sweep-trigger.txt"
+
+env:
+  SWEEP_DAYS: "180"
+  SWEEP_EQUITY: "250"
 
 permissions:
   contents: read
@@ -39,8 +48,8 @@ jobs:
           echo "==================== ETHUSDT ===================="
           python -m backtest.sweep_trail \
             --symbol ETHUSDT \
-            --days ${{ github.event.inputs.days }} \
-            --equity ${{ github.event.inputs.equity }}
+            --days ${{ github.event.inputs.days || env.SWEEP_DAYS }} \
+            --equity ${{ github.event.inputs.equity || env.SWEEP_EQUITY }}
 
       - name: Sweep XRPUSDT
         if: always()
@@ -48,8 +57,8 @@ jobs:
           echo "==================== XRPUSDT ===================="
           python -m backtest.sweep_trail \
             --symbol XRPUSDT \
-            --days ${{ github.event.inputs.days }} \
-            --equity ${{ github.event.inputs.equity }}
+            --days ${{ github.event.inputs.days || env.SWEEP_DAYS }} \
+            --equity ${{ github.event.inputs.equity || env.SWEEP_EQUITY }}
 
       - name: Sweep BNBUSDT
         if: always()
@@ -57,8 +66,8 @@ jobs:
           echo "==================== BNBUSDT ===================="
           python -m backtest.sweep_trail \
             --symbol BNBUSDT \
-            --days ${{ github.event.inputs.days }} \
-            --equity ${{ github.event.inputs.equity }}
+            --days ${{ github.event.inputs.days || env.SWEEP_DAYS }} \
+            --equity ${{ github.event.inputs.equity || env.SWEEP_EQUITY }}
 
       - name: Sweep BTCUSDT (참고)
         if: always()
@@ -66,5 +75,5 @@ jobs:
           echo "==================== BTCUSDT (참고) ===================="
           python -m backtest.sweep_trail \
             --symbol BTCUSDT \
-            --days ${{ github.event.inputs.days }} \
-            --equity ${{ github.event.inputs.equity }}
+            --days ${{ github.event.inputs.days || env.SWEEP_DAYS }} \
+            --equity ${{ github.event.inputs.equity || env.SWEEP_EQUITY }}
