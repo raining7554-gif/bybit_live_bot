@@ -88,14 +88,19 @@ def main():
           f"점검 {CHECK_SEC//60}분 / 최소간격 {MIN_GAP_SEC/86400:.1f}일 / "
           f"정규장만={'아니오' if FORCE_ANYTIME else '예'}")
     if _BROKER == "toss":
-        ip = _egress_ip()
-        print(f"[toss] 아웃바운드 IP = {ip}  (토스 WTS>Open API>허용 IP 에 등록)")
-        try:
-            rebalance_live.quant_telegram(
-                f"🌐 이 봇의 아웃바운드 IP: {ip}\n토스 Open API 허용 IP에 등록하세요. "
-                "(재배포 때마다 바뀌면 고정 IP 필요)")
-        except Exception:  # noqa: BLE001
-            pass
+        proxy = os.environ.get("TOSS_PROXY", "").strip()
+        if proxy:
+            print("[toss] TOSS_PROXY 설정됨 — 토스 호출은 프록시(고정 IP) 경유. "
+                  "토스 허용 IP엔 '프록시 IP'를 등록하세요.")
+        else:
+            ip = _egress_ip()
+            print(f"[toss] 아웃바운드 IP = {ip}  (토스 WTS>Open API>허용 IP 에 등록)")
+            try:
+                rebalance_live.quant_telegram(
+                    f"🌐 이 봇의 아웃바운드 IP: {ip}\n토스 Open API 허용 IP에 등록하세요. "
+                    "(유동 IP면 TOSS_PROXY 고정 IP 프록시 필요)")
+            except Exception:  # noqa: BLE001
+                pass
     last_run = 0.0
     while True:
         now = time.time()
