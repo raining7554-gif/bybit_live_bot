@@ -30,6 +30,13 @@ for _p in (_ROOT, _HERE):
 
 import rebalance_live
 
+# 브로커 선택: BROKER=toss 면 토스증권 어댑터, 아니면 KIS(기존). 실행할 리밸런스 모듈 결정.
+_BROKER = os.environ.get("BROKER", "kis").lower()
+if _BROKER == "toss":
+    import toss_rebalance as _rebal
+else:
+    _rebal = rebalance_live
+
 CHECK_SEC = int(os.environ.get("CHECK_INTERVAL_SEC", "1800"))     # 30분마다 점검
 MIN_GAP_SEC = int(os.environ.get("REBALANCE_PERIOD_SEC", str(1 * 24 * 3600)))  # 최소 1일 간격(매일)
 FORCE_ANYTIME = os.environ.get("REBALANCE_ANYTIME", "false").lower() == "true"  # 장시간 무시(테스트)
@@ -50,7 +57,7 @@ def _us_market_open() -> bool:
 
 def _run_once():
     try:
-        rebalance_live.main()
+        _rebal.main()
     except Exception:  # noqa: BLE001
         print("[service] 리밸런스 오류:\n" + traceback.format_exc())
         try:
@@ -62,7 +69,7 @@ def _run_once():
 def main():
     paper = os.environ.get("KIS_PAPER", "false").lower() == "true"
     execute = os.environ.get("REBALANCE_EXECUTE", "false").lower() == "true"
-    print(f"🟢 멀티에셋 서비스 시작 — PAPER={paper} EXECUTE={execute} "
+    print(f"🟢 멀티에셋 서비스 시작 — BROKER={_BROKER} PAPER={paper} EXECUTE={execute} "
           f"점검 {CHECK_SEC//60}분 / 최소간격 {MIN_GAP_SEC/86400:.1f}일 / "
           f"정규장만={'아니오' if FORCE_ANYTIME else '예'}")
     last_run = 0.0
