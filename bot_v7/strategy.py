@@ -113,6 +113,15 @@ def evaluate_entry(df_15m: pd.DataFrame, df_1h: pd.DataFrame,
     if direction == "none" or score < cfg.ENTRY_MIN_SCORE:
         return None
 
+    # v6.71: RSI 극단 진입 차단 (실거래 데이터 기반)
+    # /market 데이터: 과매도(<35) 88건 19% -$49.36 (최악 = 떨어지는 칼날)
+    # 과매수(>65)는 44% +$56 로 좋으므로 하단만 차단. env 로 조정/해제.
+    if cfg.RSI_ENTRY_BLOCK_ENABLED:
+        rsi_15m = getattr(row, "rsi", None)
+        if rsi_15m is not None and not pd.isna(rsi_15m):
+            if float(rsi_15m) < cfg.RSI_ENTRY_MIN:
+                return None
+
     # v6.28 → v6.63: D_INV 게이팅
     # 과거: 점수 65+ 모두 반전 → 트렌딩 시장에서 손실 폭주
     # 현재: regime gated. ranging 레짐 + 점수 매우 높음 (90+) 에서만 인버스

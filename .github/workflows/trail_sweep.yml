@@ -1,0 +1,79 @@
+name: Trail Width Sweep (수동)
+
+# 손절/트레일 폭 스윕 — 사용자 Q "손절/익절이 짧은가" 검증용
+# tight(2.0/2.5) ~ widest(4.0/6.0) 5가지 trail 폭을 같은 데이터에 돌려 비교.
+# 결과는 job 로그에 출력 (Claude 가 읽어서 정리).
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "백테스트 기간 (일)"
+        required: false
+        default: "180"
+      equity:
+        description: "초기 자본 ($)"
+        required: false
+        default: "250"
+  # 트리거 파일이 main 에 push 되면 자동 실행 (버튼 못 찾을 때 우회)
+  push:
+    branches: [main]
+    paths:
+      - ".github/sweep-trigger.txt"
+
+env:
+  SWEEP_DAYS: "180"
+  SWEEP_EQUITY: "250"
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install pandas numpy requests
+
+      - name: Sweep ETHUSDT
+        run: |
+          echo "==================== ETHUSDT ===================="
+          python -m backtest.sweep_trail \
+            --symbol ETHUSDT \
+            --days ${{ github.event.inputs.days || env.SWEEP_DAYS }} \
+            --equity ${{ github.event.inputs.equity || env.SWEEP_EQUITY }}
+
+      - name: Sweep XRPUSDT
+        if: always()
+        run: |
+          echo "==================== XRPUSDT ===================="
+          python -m backtest.sweep_trail \
+            --symbol XRPUSDT \
+            --days ${{ github.event.inputs.days || env.SWEEP_DAYS }} \
+            --equity ${{ github.event.inputs.equity || env.SWEEP_EQUITY }}
+
+      - name: Sweep BNBUSDT
+        if: always()
+        run: |
+          echo "==================== BNBUSDT ===================="
+          python -m backtest.sweep_trail \
+            --symbol BNBUSDT \
+            --days ${{ github.event.inputs.days || env.SWEEP_DAYS }} \
+            --equity ${{ github.event.inputs.equity || env.SWEEP_EQUITY }}
+
+      - name: Sweep BTCUSDT (참고)
+        if: always()
+        run: |
+          echo "==================== BTCUSDT (참고) ===================="
+          python -m backtest.sweep_trail \
+            --symbol BTCUSDT \
+            --days ${{ github.event.inputs.days || env.SWEEP_DAYS }} \
+            --equity ${{ github.event.inputs.equity || env.SWEEP_EQUITY }}
