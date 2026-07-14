@@ -66,12 +66,35 @@ def _run_once():
             pass
 
 
+def _egress_ip() -> str:
+    """이 컨테이너의 공인(아웃바운드) IP — 토스 Open API 허용 IP 등록용."""
+    import urllib.request
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+        try:
+            with urllib.request.urlopen(url, timeout=8) as r:
+                ip = r.read().decode().strip()
+                if ip:
+                    return ip
+        except Exception:  # noqa: BLE001
+            continue
+    return "(조회 실패)"
+
+
 def main():
     paper = os.environ.get("KIS_PAPER", "false").lower() == "true"
     execute = os.environ.get("REBALANCE_EXECUTE", "false").lower() == "true"
     print(f"🟢 멀티에셋 서비스 시작 — BROKER={_BROKER} PAPER={paper} EXECUTE={execute} "
           f"점검 {CHECK_SEC//60}분 / 최소간격 {MIN_GAP_SEC/86400:.1f}일 / "
           f"정규장만={'아니오' if FORCE_ANYTIME else '예'}")
+    if _BROKER == "toss":
+        ip = _egress_ip()
+        print(f"[toss] 아웃바운드 IP = {ip}  (토스 WTS>Open API>허용 IP 에 등록)")
+        try:
+            rebalance_live.quant_telegram(
+                f"🌐 이 봇의 아웃바운드 IP: {ip}\n토스 Open API 허용 IP에 등록하세요. "
+                "(재배포 때마다 바뀌면 고정 IP 필요)")
+        except Exception:  # noqa: BLE001
+            pass
     last_run = 0.0
     while True:
         now = time.time()
