@@ -58,10 +58,11 @@ def _us_market_open() -> bool:
 def _run_once():
     try:
         _rebal.main()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         print("[service] 리밸런스 오류:\n" + traceback.format_exc())
         try:
-            rebalance_live.quant_telegram("⚠️ 멀티에셋 리밸런스 오류 — 로그 확인 필요")
+            rebalance_live.quant_telegram(
+                f"⚠️ 멀티에셋 리밸런스 오류: {type(e).__name__}: {str(e)[:220]}")
         except Exception:
             pass
 
