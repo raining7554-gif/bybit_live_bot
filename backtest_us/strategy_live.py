@@ -24,7 +24,18 @@ from .metrics import _curve_stats
 
 TD = 252
 COST = 0.0010
-W_CORE, W_TQQQ, W_SEC = 0.70, 0.15, 0.15
+# 슬리브 비중 — env로 조절 가능. 기본 70/15/15(레버 30%).
+# '반반' 구성: LEV_TQQQ=0.25 LEV_SEC=0.25 (코어 50 + 레버 50).
+W_TQQQ = float(os.environ.get("LEV_TQQQ", "0.15"))
+W_SEC = float(os.environ.get("LEV_SEC", "0.15"))
+W_CORE = 1.0 - W_TQQQ - W_SEC
+
+# 위성(레버리지) 변동성 타게팅 — 0이면 끔(이진 on/off 유지). 예: 0.20.
+# 위성 합산 수익의 20일 실현변동성이 목표를 넘으면 그 비율만큼 노출 축소(상한 1).
+# 백테스트(2010~, 반반+0.20): CAGR +17.1% Sharpe 0.82 MaxDD -34% —
+# 반반 이진(-42.5%) 대비 낙폭·위기월(2022 -5.9%, 26-03 -8.3%) 크게 개선.
+SAT_VOL_TARGET = float(os.environ.get("SAT_VOL_TARGET", "0"))
+SAT_VOL_WIN = 20
 
 # underlying (in bundle, for trend/momentum) -> tradeable 3x ETF (for execution)
 SEC3X = {"SMH": "SOXL", "XLK": "TECL", "XLF": "FAS",
@@ -70,17 +81,28 @@ def compute():
     swe = sw.shift(1).fillna(0.0)
     sec_ret = ((swe * (3 * R[sw.columns] - LETF_DRAG / TD)).sum(axis=1)).fillna(0.0)
 
-    # combined daily return (fixed sleeve weights, weekly)
-    total = (W_CORE * core_ret + W_TQQQ * tqqq_ret + W_SEC * sec_ret).fillna(0.0)
+    # 위성 합산 + (옵션) 변동성 타게팅: 위성 변동성이 목표 초과시 노출 축소 → 현금.
+    # 백테스트는 shift(1)로 룩어헤드 방지, 라이브 목표비중은 최신(어제까지) 변동성 사용.
+    sat_ret = (W_TQQQ * tqqq_ret + W_SEC * sec_ret).fillna(0.0)
+    sat_scale_now = 1.0
+    if SAT_VOL_TARGET > 0:
+        rv = sat_ret.rolling(SAT_VOL_WIN, min_periods=SAT_VOL_WIN // 2).std() * np.sqrt(TD)
+        sc = (SAT_VOL_TARGET / rv).clip(upper=1.0)
+        sat_ret = sat_ret * sc.shift(1).fillna(0.0)
+        v = sc.iloc[-1]
+        sat_scale_now = float(v) if v == v else 1.0
 
-    # current target weights in tradeable tickers
+    # combined daily return (weekly sleeve weights)
+    total = (W_CORE * core_ret + sat_ret).fillna(0.0)
+
+    # current target weights in tradeable tickers (위성엔 vol 스케일 반영, 남는 몫은 현금)
     tgt = {}
     for a, w in (cw.iloc[-1] * W_CORE).items():
         if w > 0.005:
             tgt[a] = tgt.get(a, 0) + w
     if tq_gate.iloc[-1] > 0:
-        tgt["TQQQ"] = tgt.get("TQQQ", 0) + W_TQQQ
-    for u, w in (sw.iloc[-1] * W_SEC).items():
+        tgt["TQQQ"] = tgt.get("TQQQ", 0) + W_TQQQ * sat_scale_now
+    for u, w in (sw.iloc[-1] * W_SEC * sat_scale_now).items():
         if w > 0.003:
             tgt[SEC3X[u]] = tgt.get(SEC3X[u], 0) + float(w)
     return total, tgt, cw.index[-1]
@@ -130,6 +152,13 @@ def build_context(tgt: dict) -> str:
              f"· SPY 200일선 대비 {spy_ext:+.0%} ({'과열' if spy_ext > 0.1 else '정상'})",
              f"· 레버리지 위성: TQQQ {'ON(나스닥 상승추세)' if tqqq_on else 'OFF→현금'}",
              "· 원리: 추세 위인 자산만 보유, 변동성 낮을수록 비중↑(위험 균등)"]
+    # 위성 vol 타게팅 상태: 목표 레버리지 대비 실제 배정이 줄었으면 감속 표시
+    if SAT_VOL_TARGET > 0:
+        lev_now = tgt.get("TQQQ", 0) + sum(tgt.get(x, 0) for x in SEC3X.values())
+        lev_cfg = W_TQQQ + W_SEC
+        if lev_cfg > 0 and lev_now < lev_cfg * 0.97:
+            lines.append(f"· ⚠️ 위성 감속 중: 변동성 급등 → 레버리지 {lev_now:.0%}만 배정"
+                         f"(목표 {lev_cfg:.0%}), 나머지 현금 대기")
     # 큰 비중 2~3개 이유
     top = sorted(tgt.items(), key=lambda x: -x[1])[:3]
     for t, w in top:
@@ -175,8 +204,9 @@ def build_context(tgt: dict) -> str:
 def main():
     total, tgt, asof = compute()
     st = _curve_stats((1 + total.loc["2010-01-01":]).cumprod(), "LIVE")
-    print(f"LIVE 섹터라이딩 혼합 (코어70+TQQQ15+섹터3x15, 2010~, net): "
-          f"Sharpe={st['sharpe']:.2f} CAGR={st['cagr']:+.1%} MaxDD={st['mdd']:+.1%}")
+    vt = f", volTgt{SAT_VOL_TARGET:.0%}" if SAT_VOL_TARGET > 0 else ""
+    print(f"LIVE 섹터라이딩 혼합 (코어{W_CORE:.0%}+TQQQ{W_TQQQ:.0%}+섹터{W_SEC:.0%}{vt}, "
+          f"2010~, net): Sharpe={st['sharpe']:.2f} CAGR={st['cagr']:+.1%} MaxDD={st['mdd']:+.1%}")
 
     cap = float(os.environ.get("CAPITAL_KRW", "5000000"))
     print(f"\n=== 이번 주 목표 비중 (실거래 종목, {cap/1e4:,.0f}만원) — {asof.date()} ===")
