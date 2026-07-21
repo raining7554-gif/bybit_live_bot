@@ -1,10 +1,7 @@
 name: Weekly MR v5 Backtest Sweep
 
 on:
-  schedule:
-    # 매주 월요일 00:00 UTC = 09:00 KST
-    - cron: "0 0 * * 1"
-  workflow_dispatch:        # 수동 실행 가능
+  workflow_dispatch:        # 수동 실행만. 주간 자동 스케줄 비활성화(라이브 봇으로 이관).
 
 permissions:
   contents: write
