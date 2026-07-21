@@ -5,6 +5,11 @@ name: KR Managed-Futures Backtest
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'backtest_us/kr_backtest.py'
+      - '.github/workflows/kr_backtest.yml'
 
 permissions:
   contents: read
