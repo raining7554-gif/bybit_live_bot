@@ -1,0 +1,40 @@
+name: KR Managed-Futures Backtest
+
+# 한국 매니지드 퓨처스 전략(유휴 원화용) 검증. 네트워크 있는 러너에서 KRX ETF 데이터를
+# 받아 백테스트하고 결과를 로그 + 텔레그램으로. 수동 실행 전용.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install pandas numpy requests yfinance
+      - name: Run KR backtest
+        run: |
+          set -o pipefail
+          python -m backtest_us.kr_backtest | tee /tmp/kr.txt
+      - name: Telegram notify
+        if: ${{ env.TG_TOKEN != '' && env.TG_CHAT_ID != '' }}
+        run: |
+          python - <<'PY'
+          import os, requests
+          body=open('/tmp/kr.txt').read()[:3800]
+          requests.post(f"https://api.telegram.org/bot{os.environ['TG_TOKEN']}/sendMessage",
+              json={"chat_id":os.environ['TG_CHAT_ID'],"text":"🇰🇷 한국 전략 백테스트\n\n"+body}, timeout=10)
+          PY
