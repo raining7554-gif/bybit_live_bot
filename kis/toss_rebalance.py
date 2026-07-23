@@ -33,6 +33,10 @@ LIQUIDATE = os.environ.get("LIQUIDATE", "false").lower() == "true"
 ORDER_DELAY_SEC = float(os.environ.get("REBALANCE_ORDER_DELAY", "0.4"))
 MIN_ORDER_USD = float(os.environ.get("TOSS_MIN_ORDER_USD", "1.0"))
 
+# 토스가 소수점 거래를 막아둔 종목(레버리지/인버스/원자재/달러 ETF 등)은
+# 온주(정수) 매수로 폴백. 아래 에러코드면 소수점 불가로 간주.
+_FRAC_DENIED = {"stock-restricted", "prerequisite-required"}
+
 
 def _fmt(plan, total_usd):
     head = ("💵 실전 " if EXECUTE else "🧪 ") + ("실행" if EXECUTE else "계획(드라이런)")
@@ -73,6 +77,7 @@ def main():
     holdings = tt.get_us_holdings()
     overview = tt.get_holdings_overview()
     cash_usd = tt.get_buying_power_usd()
+    prices = tt.get_prices([s for s in tgt if s not in SKIP])
     holdings_usd = sum(h["eval_usd"] for h in holdings.values())
     account_total = holdings_usd + cash_usd
 
@@ -114,14 +119,32 @@ def main():
         if ORDER_DELAY_SEC > 0:
             time.sleep(ORDER_DELAY_SEC)
         try:
-            fn()
-            done.append(label)
+            r = fn()
+            done.append(r if isinstance(r, str) and r else label)
         except TossError as e:
             print(f"[order] {label} 실패: {e}")
             done.append(f"❌{label}: {e.code} {e.message[:70]}")
         except Exception as e:  # noqa: BLE001
             print(f"[order] {label} 예외: {e}")
             done.append(f"❌{label} 예외: {str(e)[:70]}")
+
+    def _buy(sym, usd):
+        """소수점 금액 매수 → 소수점 불가 종목이면 온주(정수) 매수로 폴백."""
+        try:
+            tt.buy_usd(sym, usd, _coid(asof_s, "B", sym))
+            return f"매수 {sym} ${usd:,.0f}"
+        except TossError as e:
+            if e.code not in _FRAC_DENIED:
+                raise
+        px = float(prices.get(sym) or (holdings.get(sym) or {}).get("price", 0.0))
+        if px <= 0:
+            raise TossError(0, "no-price", f"{sym} 시세 없음 — 온주 매수 불가")
+        qty = int(usd / px)
+        if qty < 1:
+            raise TossError(0, "below-1share",
+                            f"소수점 불가 종목, 배정 ${usd:,.0f} < 1주(${px:,.0f})")
+        tt.buy_qty(sym, qty, _coid(asof_s, "BQ", sym))
+        return f"매수 {sym} {qty}주(온주 ${qty * px:,.0f})"
 
     # 1) 청산(목표 외 전량매도)
     for h in liq:
@@ -143,11 +166,11 @@ def main():
         _order(lambda sym=sym, qty=qty: tt.sell_qty(sym, qty, _coid(asof_s, "S", sym)),
                f"매도 {sym} {qty:g}주(축소)")
 
-    # 3) 부족 비중 매수(금액 기반, 소수점)
+    # 3) 부족 비중 매수(소수점 금액 → 불가 종목은 온주 폴백)
     for sym, w, tgt_usd, cur_usd, step in plan:
         if step <= MIN_ORDER_USD:
             continue
-        _order(lambda sym=sym, step=step: tt.buy_usd(sym, step, _coid(asof_s, "B", sym)),
+        _order(lambda sym=sym, step=step: _buy(sym, step),
                f"매수 {sym} ${step:,.0f}")
 
     if done:

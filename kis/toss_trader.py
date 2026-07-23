@@ -93,6 +93,17 @@ def buy_usd(symbol: str, usd: float, client_order_id: str | None = None) -> dict
                    body=body).get("result", {})
 
 
+def buy_qty(symbol: str, qty: int, client_order_id: str | None = None) -> dict:
+    """수량(정수 온주) 시장가 매수 — quantity. 소수점 거래가 막힌 종목
+    (레버리지/인버스/원자재/달러 ETF 등)용 폴백. 정규장에서만 접수됨."""
+    body = {"symbol": symbol, "side": "BUY", "orderType": "MARKET",
+            "quantity": f"{int(qty)}"}
+    if client_order_id:
+        body["clientOrderId"] = client_order_id[:36]
+    return request("POST", "/api/v1/orders", account_seq=account_seq(),
+                   body=body).get("result", {})
+
+
 def sell_qty(symbol: str, qty: float, client_order_id: str | None = None) -> dict:
     """수량(소수점) 시장가 매도 — 정규장에서만. 성공: {'orderId':...}."""
     body = {"symbol": symbol, "side": "SELL", "orderType": "MARKET",
